@@ -6,6 +6,8 @@ services:
       POSTGRES_USER: docflow
       POSTGRES_PASSWORD: docflow
       POSTGRES_DB: docflow
+      TZ: UTC
+      PGTZ: UTC
     ports:
       - "5432:5432"
     volumes:
