@@ -17,3 +17,16 @@ var (
 	ErrForbidden           = errors.New("forbidden")
 	ErrConflict            = errors.New("conflict")
 )
+
+// Workspace errors
+var (
+	ErrAlreadyMember           = errors.New("user is already a workspace member")
+	ErrCannotRemoveOwner       = errors.New("cannot remove the workspace owner")
+	ErrCannotChangeSelfRole    = errors.New("cannot change your own role")
+	ErrInsufficientPermissions = errors.New("insufficient permissions")
+)
+
+// Board errors
+var (
+	ErrBoardAccessDenied = errors.New("board access denied")
+)

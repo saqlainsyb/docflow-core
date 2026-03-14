@@ -14,17 +14,20 @@ import (
 type AuthService struct {
 	userRepo         *repositories.UserRepository
 	refreshTokenRepo *repositories.RefreshTokenRepository
+	workspaceRepo    *repositories.WorkspaceRepository
 	cfg              *config.Config
 }
 
 func NewAuthService(
 	userRepo *repositories.UserRepository,
 	refreshTokenRepo *repositories.RefreshTokenRepository,
+	workspaceRepo *repositories.WorkspaceRepository,
 	cfg *config.Config,
 ) *AuthService {
 	return &AuthService{
 		userRepo:         userRepo,
 		refreshTokenRepo: refreshTokenRepo,
+		workspaceRepo:    workspaceRepo,
 		cfg:              cfg,
 	}
 }
@@ -56,6 +59,13 @@ func (s *AuthService) Register(ctx context.Context, req models.RegisterRequest) 
 
 	// create the user
 	user, err := s.userRepo.Create(ctx, req.Email, hash, req.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	// auto-create personal workspace — every user gets one on registration
+	// name format: "{name}'s Workspace"
+	_, err = s.workspaceRepo.CreateWithOwner(ctx, req.Name+"'s Workspace", user.ID)
 	if err != nil {
 		return nil, err
 	}

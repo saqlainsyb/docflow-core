@@ -7,11 +7,18 @@ import (
 	"github.com/saqlainsyb/docflow-core/internal/config"
 	"github.com/saqlainsyb/docflow-core/internal/handlers"
 	"github.com/saqlainsyb/docflow-core/internal/middleware"
+	"github.com/saqlainsyb/docflow-core/internal/repositories"
 )
 
 func Setup(
-	cfg *config.Config,
-	authHandler *handlers.AuthHandler,
+	cfg              *config.Config,
+	authHandler      *handlers.AuthHandler,
+	workspaceHandler *handlers.WorkspaceHandler,
+	boardHandler     *handlers.BoardHandler,
+	columnHandler    *handlers.ColumnHandler,
+	workspaceRepo    *repositories.WorkspaceRepository,
+	boardRepo        *repositories.BoardRepository,
+	columnRepo       *repositories.ColumnRepository,
 ) *gin.Engine {
 
 	r := gin.New()
@@ -25,7 +32,7 @@ func Setup(
 
 	api := r.Group("/api/v1")
 
-	// ── public routes — no auth ───────────────────────────────────────────
+	// ── public routes ─────────────────────────────────────────────────────
 	auth := api.Group("/auth")
 	{
 		auth.POST("/register", authHandler.Register)
@@ -33,12 +40,57 @@ func Setup(
 		auth.POST("/refresh",  authHandler.Refresh)
 	}
 
+	// public share link — no auth required
+	api.GET("/share/:token", boardHandler.GetPublicBoard)
+
 	// ── protected routes — JWT required ───────────────────────────────────
 	protected := api.Group("")
 	protected.Use(middleware.Auth(cfg))
 	{
 		protected.POST("/auth/logout", authHandler.Logout)
 		protected.GET("/users/me",     authHandler.GetMe)
+
+		// workspace routes
+		protected.GET("/workspaces",  workspaceHandler.ListWorkspaces)
+		protected.POST("/workspaces", workspaceHandler.CreateWorkspace)
+
+		// workspace-scoped routes
+		ws := protected.Group("/workspaces/:id")
+		ws.Use(middleware.Workspace(workspaceRepo))
+		{
+			ws.GET("",                 workspaceHandler.GetWorkspace)
+			ws.PATCH("",               workspaceHandler.RenameWorkspace)
+			ws.DELETE("",              workspaceHandler.DeleteWorkspace)
+			ws.GET("/members",         workspaceHandler.ListMembers)
+			ws.POST("/members",        workspaceHandler.InviteMember)
+			ws.PATCH("/members/:uid",  workspaceHandler.UpdateMemberRole)
+			ws.DELETE("/members/:uid", workspaceHandler.RemoveMember)
+			ws.GET("/boards",          boardHandler.ListBoards)
+			ws.POST("/boards",         boardHandler.CreateBoard)
+		}
+
+		// board-scoped routes — board middleware resolves workspace + role
+		board := protected.Group("/boards/:id")
+		board.Use(middleware.Board(boardRepo, workspaceRepo))
+		{
+			board.GET("",                 boardHandler.GetBoardDetail)
+			board.PATCH("",               boardHandler.UpdateBoard)
+			board.DELETE("",              boardHandler.DeleteBoard)
+			board.GET("/members",         boardHandler.ListBoardMembers)
+			board.POST("/members",        boardHandler.AddBoardMember)
+			board.DELETE("/members/:uid", boardHandler.RemoveBoardMember)
+			board.POST("/share-link",     boardHandler.GenerateShareLink)
+			board.DELETE("/share-link",   boardHandler.RevokeShareLink)
+			board.POST("/columns",        columnHandler.CreateColumn)
+		}
+
+		// column-scoped routes — column middleware resolves board + workspace + role
+		col := protected.Group("/columns/:id")
+		col.Use(middleware.Column(columnRepo, boardRepo, workspaceRepo))
+		{
+			col.PATCH("",  columnHandler.UpdateColumn)
+			col.DELETE("", columnHandler.DeleteColumn)
+		}
 	}
 
 	return r
