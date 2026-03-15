@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/saqlainsyb/docflow-core/internal/repositories"
 	"github.com/saqlainsyb/docflow-core/internal/utils"
 )
@@ -15,6 +16,12 @@ func Workspace(workspaceRepo *repositories.WorkspaceRepository) gin.HandlerFunc 
 		workspaceID := c.Param("id")
 		if workspaceID == "" {
 			utils.ErrorResponse(c, 400, "INVALID_WORKSPACE_ID", "workspace id is required")
+			c.Abort()
+			return
+		}
+
+		if _, err := uuid.Parse(workspaceID); err != nil {
+			utils.ErrorResponse(c, 400, "INVALID_UUID", "workspace id is not a valid UUID")
 			c.Abort()
 			return
 		}

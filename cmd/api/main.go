@@ -29,21 +29,35 @@ func main() {
 	workspaceRepo    := repositories.NewWorkspaceRepository(dbPool)
 	boardRepo        := repositories.NewBoardRepository(dbPool)
 	columnRepo       := repositories.NewColumnRepository(dbPool)
+	cardRepo         := repositories.NewCardRepository(dbPool)
 
 	// services
 	authService      := services.NewAuthService(userRepo, refreshTokenRepo, workspaceRepo, cfg)
 	workspaceService := services.NewWorkspaceService(workspaceRepo, userRepo)
 	boardService     := services.NewBoardService(boardRepo, workspaceRepo, cfg)
 	columnService    := services.NewColumnService(columnRepo, boardService)
+	cardService      := services.NewCardService(cardRepo, columnRepo, boardService)
 
 	// handlers
 	authHandler      := handlers.NewAuthHandler(authService)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	boardHandler     := handlers.NewBoardHandler(boardService)
 	columnHandler    := handlers.NewColumnHandler(columnService)
+	cardHandler      := handlers.NewCardHandler(cardService)
 
 	// router
-	r := router.Setup(cfg, authHandler, workspaceHandler, boardHandler, columnHandler, workspaceRepo, boardRepo, columnRepo)
+	r := router.Setup(
+		cfg,
+		authHandler,
+		workspaceHandler,
+		boardHandler,
+		columnHandler,
+		cardHandler,
+		workspaceRepo,
+		boardRepo,
+		columnRepo,
+		cardRepo,
+	)
 
 	log.Printf("server running on port %s", cfg.AppPort)
 	if err := r.Run(":" + cfg.AppPort); err != nil {

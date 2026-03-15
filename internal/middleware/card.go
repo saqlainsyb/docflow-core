@@ -7,37 +7,50 @@ import (
 	"github.com/saqlainsyb/docflow-core/internal/utils"
 )
 
-// Board resolves the board from :id in the URL, finds its workspace,
-// checks that the authenticated user is a workspace member, and injects
-// workspace_id and member_role into the Gin context.
+// Card resolves the card from :id in the URL, walks up to its board and
+// workspace, checks that the authenticated user is a workspace member,
+// and injects workspace_id and member_role into the Gin context.
 // Must run after the Auth middleware — depends on user_id being present.
-// Board-level access control (private vs workspace visibility) is handled
-// in the service layer after this middleware passes.
-func Board(
+func Card(
+	cardRepo *repositories.CardRepository,
 	boardRepo *repositories.BoardRepository,
 	workspaceRepo *repositories.WorkspaceRepository,
 ) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		boardID := c.Param("id")
-		if boardID == "" {
-			utils.ErrorResponse(c, 400, "INVALID_BOARD_ID", "board id is required")
-			c.Abort()
-			return
-		}
-
-		if _, err := uuid.Parse(boardID); err != nil {
-			utils.ErrorResponse(c, 400, "INVALID_UUID", "board id is not a valid UUID")
+		cardID := c.Param("id")
+		if cardID == "" {
+			utils.ErrorResponse(c, 400, "INVALID_CARD_ID", "card id is required")
 			c.Abort()
 			return
 		}
 
 		userID := c.GetString("user_id")
 
-		// look up the board to get its workspace_id
-		board, err := boardRepo.FindByID(c.Request.Context(), boardID)
+		// validate UUID format before hitting the database
+		if _, err := uuid.Parse(cardID); err != nil {
+			utils.ErrorResponse(c, 400, "INVALID_UUID", "card id is not a valid UUID")
+			c.Abort()
+			return
+		}
+
+		// look up the card to get its board_id
+		card, err := cardRepo.FindByID(c.Request.Context(), cardID)
 		if err != nil {
 			if err == repositories.ErrNotFound {
-				utils.ErrorResponse(c, 404, "BOARD_NOT_FOUND", "board not found or not accessible")
+				utils.ErrorResponse(c, 404, "CARD_NOT_FOUND", "card not found")
+				c.Abort()
+				return
+			}
+			utils.ErrInternal(c)
+			c.Abort()
+			return
+		}
+
+		// look up the board to get its workspace_id
+		board, err := boardRepo.FindByID(c.Request.Context(), card.BoardID)
+		if err != nil {
+			if err == repositories.ErrNotFound {
+				utils.ErrorResponse(c, 404, "BOARD_NOT_FOUND", "board not found")
 				c.Abort()
 				return
 			}
@@ -59,7 +72,6 @@ func Board(
 			return
 		}
 
-		// inject so handlers and services can read them
 		c.Set("workspace_id", board.WorkspaceID)
 		c.Set("member_role", member.Role)
 

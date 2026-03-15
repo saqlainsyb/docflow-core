@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/saqlainsyb/docflow-core/internal/repositories"
 	"github.com/saqlainsyb/docflow-core/internal/utils"
 )
@@ -19,6 +20,12 @@ func Column(
 		columnID := c.Param("id")
 		if columnID == "" {
 			utils.ErrorResponse(c, 400, "INVALID_COLUMN_ID", "column id is required")
+			c.Abort()
+			return
+		}
+
+		if _, err := uuid.Parse(columnID); err != nil {
+			utils.ErrorResponse(c, 400, "INVALID_UUID", "column id is not a valid UUID")
 			c.Abort()
 			return
 		}

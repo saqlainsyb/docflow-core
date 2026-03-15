@@ -16,9 +16,11 @@ func Setup(
 	workspaceHandler *handlers.WorkspaceHandler,
 	boardHandler     *handlers.BoardHandler,
 	columnHandler    *handlers.ColumnHandler,
+	cardHandler      *handlers.CardHandler,
 	workspaceRepo    *repositories.WorkspaceRepository,
 	boardRepo        *repositories.BoardRepository,
 	columnRepo       *repositories.ColumnRepository,
+	cardRepo         *repositories.CardRepository,
 ) *gin.Engine {
 
 	r := gin.New()
@@ -50,7 +52,7 @@ func Setup(
 		protected.POST("/auth/logout", authHandler.Logout)
 		protected.GET("/users/me",     authHandler.GetMe)
 
-		// workspace routes
+		// workspace routes — no workspace middleware (not scoped to a specific workspace)
 		protected.GET("/workspaces",  workspaceHandler.ListWorkspaces)
 		protected.POST("/workspaces", workspaceHandler.CreateWorkspace)
 
@@ -88,8 +90,20 @@ func Setup(
 		col := protected.Group("/columns/:id")
 		col.Use(middleware.Column(columnRepo, boardRepo, workspaceRepo))
 		{
-			col.PATCH("",  columnHandler.UpdateColumn)
-			col.DELETE("", columnHandler.DeleteColumn)
+			col.PATCH("",        columnHandler.UpdateColumn)
+			col.DELETE("",       columnHandler.DeleteColumn)
+			col.POST("/cards",   cardHandler.CreateCard)
+		}
+
+		// card-scoped routes — card middleware resolves board + workspace + role
+		card := protected.Group("/cards/:id")
+		card.Use(middleware.Card(cardRepo, boardRepo, workspaceRepo))
+		{
+			card.PATCH("",          cardHandler.UpdateCard)
+			card.DELETE("",         cardHandler.DeleteCard)
+			card.POST("/move",      cardHandler.MoveCard)
+			card.POST("/archive",   cardHandler.ArchiveCard)
+			card.POST("/unarchive", cardHandler.UnarchiveCard)
 		}
 	}
 
