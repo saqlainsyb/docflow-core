@@ -17,10 +17,12 @@ func Setup(
 	boardHandler     *handlers.BoardHandler,
 	columnHandler    *handlers.ColumnHandler,
 	cardHandler      *handlers.CardHandler,
+	documentHandler  *handlers.DocumentHandler,
 	workspaceRepo    *repositories.WorkspaceRepository,
 	boardRepo        *repositories.BoardRepository,
 	columnRepo       *repositories.ColumnRepository,
 	cardRepo         *repositories.CardRepository,
+	documentRepo     *repositories.DocumentRepository,
 ) *gin.Engine {
 
 	r := gin.New()
@@ -52,7 +54,7 @@ func Setup(
 		protected.POST("/auth/logout", authHandler.Logout)
 		protected.GET("/users/me",     authHandler.GetMe)
 
-		// workspace routes — no workspace middleware (not scoped to a specific workspace)
+		// workspace routes
 		protected.GET("/workspaces",  workspaceHandler.ListWorkspaces)
 		protected.POST("/workspaces", workspaceHandler.CreateWorkspace)
 
@@ -71,7 +73,7 @@ func Setup(
 			ws.POST("/boards",         boardHandler.CreateBoard)
 		}
 
-		// board-scoped routes — board middleware resolves workspace + role
+		// board-scoped routes
 		board := protected.Group("/boards/:id")
 		board.Use(middleware.Board(boardRepo, workspaceRepo))
 		{
@@ -86,16 +88,16 @@ func Setup(
 			board.POST("/columns",        columnHandler.CreateColumn)
 		}
 
-		// column-scoped routes — column middleware resolves board + workspace + role
+		// column-scoped routes
 		col := protected.Group("/columns/:id")
 		col.Use(middleware.Column(columnRepo, boardRepo, workspaceRepo))
 		{
-			col.PATCH("",        columnHandler.UpdateColumn)
-			col.DELETE("",       columnHandler.DeleteColumn)
-			col.POST("/cards",   cardHandler.CreateCard)
+			col.PATCH("",      columnHandler.UpdateColumn)
+			col.DELETE("",     columnHandler.DeleteColumn)
+			col.POST("/cards", cardHandler.CreateCard)
 		}
 
-		// card-scoped routes — card middleware resolves board + workspace + role
+		// card-scoped routes
 		card := protected.Group("/cards/:id")
 		card.Use(middleware.Card(cardRepo, boardRepo, workspaceRepo))
 		{
@@ -104,6 +106,14 @@ func Setup(
 			card.POST("/move",      cardHandler.MoveCard)
 			card.POST("/archive",   cardHandler.ArchiveCard)
 			card.POST("/unarchive", cardHandler.UnarchiveCard)
+		}
+
+		// document-scoped routes
+		doc := protected.Group("/documents/:id")
+		doc.Use(middleware.Document(documentRepo, cardRepo, boardRepo, workspaceRepo))
+		{
+			doc.POST("/token",    documentHandler.IssueToken)
+			doc.GET("/snapshot",  documentHandler.GetSnapshot)
 		}
 	}
 

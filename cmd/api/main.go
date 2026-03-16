@@ -30,6 +30,7 @@ func main() {
 	boardRepo        := repositories.NewBoardRepository(dbPool)
 	columnRepo       := repositories.NewColumnRepository(dbPool)
 	cardRepo         := repositories.NewCardRepository(dbPool)
+	documentRepo     := repositories.NewDocumentRepository(dbPool)
 
 	// services
 	authService      := services.NewAuthService(userRepo, refreshTokenRepo, workspaceRepo, cfg)
@@ -37,6 +38,7 @@ func main() {
 	boardService     := services.NewBoardService(boardRepo, workspaceRepo, cfg)
 	columnService    := services.NewColumnService(columnRepo, boardService)
 	cardService      := services.NewCardService(cardRepo, columnRepo, boardService)
+	documentService  := services.NewDocumentService(documentRepo, cardRepo, columnRepo, boardService, cfg)
 
 	// handlers
 	authHandler      := handlers.NewAuthHandler(authService)
@@ -44,6 +46,7 @@ func main() {
 	boardHandler     := handlers.NewBoardHandler(boardService)
 	columnHandler    := handlers.NewColumnHandler(columnService)
 	cardHandler      := handlers.NewCardHandler(cardService)
+	documentHandler  := handlers.NewDocumentHandler(documentService)
 
 	// router
 	r := router.Setup(
@@ -53,10 +56,12 @@ func main() {
 		boardHandler,
 		columnHandler,
 		cardHandler,
+		documentHandler,
 		workspaceRepo,
 		boardRepo,
 		columnRepo,
 		cardRepo,
+		documentRepo,
 	)
 
 	log.Printf("server running on port %s", cfg.AppPort)
