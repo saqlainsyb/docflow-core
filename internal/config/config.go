@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -33,6 +34,10 @@ type Config struct {
 
 	// Logging
 	LogLevel string
+
+	// Rate Limiting
+	RateLimitRequests int
+	RateLimitWindow   time.Duration
 }
 
 func Load() *Config {
@@ -57,7 +62,10 @@ func Load() *Config {
 		JWTDocumentExpiry: mustParseDuration("JWT_DOCUMENT_EXPIRY", "1h"),
 
 		CORSAllowedOrigin: getEnv("CORS_ALLOWED_ORIGIN", "http://localhost:5173"),
-		LogLevel:          getEnv("LOG_LEVEL", "debug"),
+		RateLimitRequests: mustParseInt("RATE_LIMIT_REQUESTS", 60),
+		RateLimitWindow:   mustParseDuration("RATE_LIMIT_WINDOW", "1m"),
+
+		LogLevel: getEnv("LOG_LEVEL", "debug"),
 	}
 }
 
@@ -87,4 +95,16 @@ func mustParseDuration(key, fallback string) time.Duration {
 		log.Fatalf("invalid duration for %s: %s", key, val)
 	}
 	return d
+}
+
+func mustParseInt(key string, fallback int) int {
+	val := os.Getenv(key)
+	if val == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		log.Fatalf("invalid integer for %s: %s", key, val)
+	}
+	return n
 }

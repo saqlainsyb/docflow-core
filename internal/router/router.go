@@ -1,3 +1,4 @@
+// internal/router/router.go
 package router
 
 import (
@@ -18,6 +19,7 @@ func Setup(
 	columnHandler    *handlers.ColumnHandler,
 	cardHandler      *handlers.CardHandler,
 	documentHandler  *handlers.DocumentHandler,
+	wsHandler        *handlers.WSHandler,
 	workspaceRepo    *repositories.WorkspaceRepository,
 	boardRepo        *repositories.BoardRepository,
 	columnRepo       *repositories.ColumnRepository,
@@ -28,15 +30,23 @@ func Setup(
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
+	r.Use(middleware.CORS(cfg)) 
+	r.Use(middleware.RateLimit(cfg))
 
 	// health check — no auth required
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// ── WebSocket routes (/ws/... — outside /api/v1) ──────────────────────
+	// Auth is handled inside the handler via ?token= query param.
+	// Browser WebSocket API cannot set custom headers so token goes in URL.
+	r.GET("/ws/documents/:id", wsHandler.HandleDocumentWS)
+	r.GET("/ws/boards/:id",    wsHandler.HandleBoardWS)
+
 	api := r.Group("/api/v1")
 
-	// ── public routes ─────────────────────────────────────────────────────
+	// ── public routes ──────────────────────────────────────────────────────
 	auth := api.Group("/auth")
 	{
 		auth.POST("/register", authHandler.Register)
@@ -53,6 +63,7 @@ func Setup(
 	{
 		protected.POST("/auth/logout", authHandler.Logout)
 		protected.GET("/users/me",     authHandler.GetMe)
+		protected.PATCH("/users/me",   authHandler.UpdateMe)
 
 		// workspace routes
 		protected.GET("/workspaces",  workspaceHandler.ListWorkspaces)
@@ -112,8 +123,8 @@ func Setup(
 		doc := protected.Group("/documents/:id")
 		doc.Use(middleware.Document(documentRepo, cardRepo, boardRepo, workspaceRepo))
 		{
-			doc.POST("/token",    documentHandler.IssueToken)
-			doc.GET("/snapshot",  documentHandler.GetSnapshot)
+			doc.POST("/token",   documentHandler.IssueToken)
+			doc.GET("/snapshot", documentHandler.GetSnapshot)
 		}
 	}
 

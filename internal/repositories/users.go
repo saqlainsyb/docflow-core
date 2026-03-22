@@ -103,28 +103,25 @@ func (r *UserRepository) Create(ctx context.Context, email, passwordHash, name s
 	return user, nil
 }
 
-// Update changes a user's name and/or avatar URL.
-// Only updates fields that are provided — nil fields are left unchanged.
-func (r *UserRepository) Update(ctx context.Context, id string, name *string, avatarURL *string) (*models.User, error) {
-	query := `
+// Update changes a user's name and/or avatar_url.
+// Uses COALESCE so nil fields are left unchanged — only provided fields are updated.
+// Returns the updated user as a UserPublic DTO (no password hash).
+func (r *UserRepository) Update(ctx context.Context, id string, name, avatarURL *string) (*models.UserPublic, error) {
+	user := &models.UserPublic{}
+	err := r.db.QueryRow(ctx, `
 		UPDATE users
 		SET
 			name       = COALESCE($1, name),
 			avatar_url = COALESCE($2, avatar_url),
 			updated_at = NOW()
 		WHERE id = $3
-		RETURNING id, email, password_hash, name, avatar_url, created_at, updated_at
-	`
-
-	user := &models.User{}
-	err := r.db.QueryRow(ctx, query, name, avatarURL, id).Scan(
+		RETURNING id, email, name, avatar_url, created_at
+	`, name, avatarURL, id).Scan(
 		&user.ID,
 		&user.Email,
-		&user.PasswordHash,
 		&user.Name,
 		&user.AvatarURL,
 		&user.CreatedAt,
-		&user.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

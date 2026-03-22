@@ -9,6 +9,7 @@ var (
 	ErrInvalidRefreshToken = errors.New("invalid refresh token")
 	ErrRefreshTokenExpired = errors.New("refresh token expired")
 	ErrTokenTheftDetected  = errors.New("token theft detected")
+	ErrWeakPassword = errors.New("password does not meet requirements")
 )
 
 // Resource errors
@@ -16,6 +17,7 @@ var (
 	ErrNotFound            = errors.New("resource not found")
 	ErrForbidden           = errors.New("forbidden")
 	ErrConflict            = errors.New("conflict")
+	ErrUserNotFound        = errors.New("user not found")
 )
 
 // Workspace errors

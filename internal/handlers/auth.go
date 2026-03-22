@@ -101,6 +101,27 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
+// UpdateMe handles PATCH /api/v1/users/me
+// Updates the authenticated user's name and/or avatar_url.
+// Both fields are optional — send only what you want to change.
+func (h *AuthHandler) UpdateMe(c *gin.Context) {
+	var req models.UpdateMeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		return
+	}
+
+	userID := c.GetString("user_id")
+
+	user, err := h.authService.UpdateMe(c.Request.Context(), userID, req)
+	if err != nil {
+		handleAuthError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, user)
+}
+
 // handleAuthError maps service errors to the correct HTTP response.
 // This keeps error mapping in one place instead of scattered across handlers.
 func handleAuthError(c *gin.Context, err error) {
@@ -115,6 +136,10 @@ func handleAuthError(c *gin.Context, err error) {
 		utils.ErrUnauthorized(c, "REFRESH_TOKEN_EXPIRED", "refresh token has expired")
 	case errors.Is(err, services.ErrTokenTheftDetected):
 		utils.ErrUnauthorized(c, "TOKEN_THEFT_DETECTED", "suspicious activity detected, please login again")
+	case errors.Is(err, services.ErrUserNotFound):
+		utils.ErrorResponse(c, http.StatusNotFound, "USER_NOT_FOUND", "user not found")
+	case errors.Is(err, services.ErrWeakPassword):
+		utils.ErrorResponse(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 	default:
 		utils.ErrInternal(c)
 	}

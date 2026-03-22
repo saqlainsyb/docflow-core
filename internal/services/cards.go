@@ -9,21 +9,35 @@ import (
 	"github.com/saqlainsyb/docflow-core/internal/utils"
 )
 
+// BoardBroadcaster is the narrow interface the card and column services
+// need from the WebSocket hub. Defined here in the services package so
+// services never import the ws package — that would create a circular
+// dependency (ws already imports services for DocumentService).
+//
+// *ws.Hub satisfies this interface automatically via its BroadcastToBoard
+// method — no changes needed in the ws package.
+type BoardBroadcaster interface {
+	BroadcastToBoard(boardID string, payload any)
+}
+
 type CardService struct {
 	cardRepo     *repositories.CardRepository
 	columnRepo   *repositories.ColumnRepository
 	boardService *BoardService
+	hub          BoardBroadcaster
 }
 
 func NewCardService(
 	cardRepo *repositories.CardRepository,
 	columnRepo *repositories.ColumnRepository,
 	boardService *BoardService,
+	hub BoardBroadcaster,
 ) *CardService {
 	return &CardService{
 		cardRepo:     cardRepo,
 		columnRepo:   columnRepo,
 		boardService: boardService,
+		hub:          hub,
 	}
 }
 
@@ -33,7 +47,8 @@ func NewCardService(
 // 2. Verify the column belongs to the board
 // 3. Compute position = max position in column + 1000
 // 4. Insert card + document in a single transaction
-// 5. Return CardResponse (includes document_id)
+// 5. Broadcast CARD_CREATED to the board room
+// 6. Return CardResponse (includes document_id)
 func (s *CardService) CreateCard(ctx context.Context, columnID, userID, memberRole string, req models.CreateCardRequest) (*models.CardResponse, error) {
 	// resolve the column to get its board_id
 	col, err := s.columnRepo.FindByID(ctx, columnID)
@@ -62,7 +77,11 @@ func (s *CardService) CreateCard(ctx context.Context, columnID, userID, memberRo
 
 	resp := cardToResponse(card, documentID, nil)
 
-	// TODO: broadcast CARD_CREATED event to board WebSocket room
+	// broadcast to every tab that has this board open
+	s.hub.BroadcastToBoard(col.BoardID, map[string]any{
+		"type": "CARD_CREATED",
+		"card": resp,
+	})
 
 	return resp, nil
 }
@@ -97,7 +116,24 @@ func (s *CardService) UpdateCard(ctx context.Context, cardID, userID, memberRole
 
 	resp := cardToResponse(updated, documentID, nil)
 
-	// TODO: broadcast CARD_UPDATED event to board WebSocket room
+	// build a changes object containing only the fields that were sent —
+	// the frontend merges this into its local card copy
+	changes := map[string]any{}
+	if req.Title != nil {
+		changes["title"] = *req.Title
+	}
+	if req.Color != nil {
+		changes["color"] = *req.Color
+	}
+	if req.AssigneeID != nil {
+		changes["assignee_id"] = *req.AssigneeID
+	}
+
+	s.hub.BroadcastToBoard(card.BoardID, map[string]any{
+		"type":    "CARD_UPDATED",
+		"card_id": cardID,
+		"changes": changes,
+	})
 
 	return resp, nil
 }
@@ -106,9 +142,10 @@ func (s *CardService) UpdateCard(ctx context.Context, cardID, userID, memberRole
 // Steps:
 // 1. Verify board access
 // 2. Verify target column belongs to the same board (prevents cross-board moves)
-// 3. Check gap between neighbors — rebalance column if gap too small
+// 3. Check gap between neighboring positions — rebalance column if gap too small
 // 4. Update card in DB
-// 5. Return updated card
+// 5. Broadcast CARD_MOVED to the board room
+// 6. Return updated card
 func (s *CardService) MoveCard(ctx context.Context, cardID, userID, memberRole string, req models.MoveCardRequest) (*models.CardResponse, error) {
 	card, err := s.cardRepo.FindByID(ctx, cardID)
 	if err != nil {
@@ -174,7 +211,12 @@ func (s *CardService) MoveCard(ctx context.Context, cardID, userID, memberRole s
 
 	resp := cardToResponse(moved, documentID, nil)
 
-	// TODO: broadcast CARD_MOVED event to board WebSocket room
+	s.hub.BroadcastToBoard(card.BoardID, map[string]any{
+		"type":      "CARD_MOVED",
+		"card_id":   cardID,
+		"column_id": req.ColumnID,
+		"position":  finalPosition,
+	})
 
 	return resp, nil
 }
@@ -194,6 +236,9 @@ func (s *CardService) DeleteCard(ctx context.Context, cardID, userID, memberRole
 		return err
 	}
 
+	// capture boardID before the card is deleted
+	boardID := card.BoardID
+
 	if err := s.cardRepo.Delete(ctx, cardID); err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			return ErrNotFound
@@ -201,7 +246,10 @@ func (s *CardService) DeleteCard(ctx context.Context, cardID, userID, memberRole
 		return err
 	}
 
-	// TODO: broadcast CARD_DELETED event to board WebSocket room
+	s.hub.BroadcastToBoard(boardID, map[string]any{
+		"type":    "CARD_DELETED",
+		"card_id": cardID,
+	})
 
 	return nil
 }
@@ -228,7 +276,10 @@ func (s *CardService) ArchiveCard(ctx context.Context, cardID, userID, memberRol
 		return err
 	}
 
-	// TODO: broadcast CARD_ARCHIVED event to board WebSocket room
+	s.hub.BroadcastToBoard(card.BoardID, map[string]any{
+		"type":    "CARD_ARCHIVED",
+		"card_id": cardID,
+	})
 
 	return nil
 }
@@ -254,7 +305,10 @@ func (s *CardService) UnarchiveCard(ctx context.Context, cardID, userID, memberR
 		return err
 	}
 
-	// TODO: broadcast CARD_UNARCHIVED event to board WebSocket room
+	s.hub.BroadcastToBoard(card.BoardID, map[string]any{
+		"type":    "CARD_UNARCHIVED",
+		"card_id": cardID,
+	})
 
 	return nil
 }

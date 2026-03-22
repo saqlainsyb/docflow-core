@@ -1,3 +1,4 @@
+// cmd/api/main.go
 package main
 
 import (
@@ -9,21 +10,22 @@ import (
 	"github.com/saqlainsyb/docflow-core/internal/repositories"
 	"github.com/saqlainsyb/docflow-core/internal/router"
 	"github.com/saqlainsyb/docflow-core/internal/services"
+	"github.com/saqlainsyb/docflow-core/internal/ws"
 )
 
 func main() {
-	// config
+	// ── config ────────────────────────────────────────────────────────────
 	cfg := config.Load()
 	log.Printf("starting docflow in %s mode on port %s", cfg.AppEnv, cfg.AppPort)
 
-	// database connections
+	// ── database connections ──────────────────────────────────────────────
 	dbPool := db.Connect(cfg)
 	defer dbPool.Close()
 
 	redisClient := db.ConnectRedis(cfg)
 	defer redisClient.Close()
 
-	// repositories
+	// ── repositories ─────────────────────────────────────────────────────
 	userRepo         := repositories.NewUserRepository(dbPool)
 	refreshTokenRepo := repositories.NewRefreshTokenRepository(dbPool)
 	workspaceRepo    := repositories.NewWorkspaceRepository(dbPool)
@@ -32,23 +34,32 @@ func main() {
 	cardRepo         := repositories.NewCardRepository(dbPool)
 	documentRepo     := repositories.NewDocumentRepository(dbPool)
 
-	// services
+	// ── services (partial — documentService needed by hub) ───────────────
 	authService      := services.NewAuthService(userRepo, refreshTokenRepo, workspaceRepo, cfg)
 	workspaceService := services.NewWorkspaceService(workspaceRepo, userRepo)
 	boardService     := services.NewBoardService(boardRepo, workspaceRepo, cfg)
-	columnService    := services.NewColumnService(columnRepo, boardService)
-	cardService      := services.NewCardService(cardRepo, columnRepo, boardService)
 	documentService  := services.NewDocumentService(documentRepo, cardRepo, columnRepo, boardService, cfg)
 
-	// handlers
+	// ── websocket hub ─────────────────────────────────────────────────────
+	// Must be created after documentService (hub holds a reference to it for
+	// Yjs update persistence) but BEFORE columnService and cardService —
+	// they now depend on hub via the BoardBroadcaster interface.
+	hub := ws.NewHub(documentService)
+
+	// ── services (remainder — depend on hub) ──────────────────────────────
+	columnService := services.NewColumnService(columnRepo, boardService, hub)
+	cardService   := services.NewCardService(cardRepo, columnRepo, boardService, hub)
+
+	// ── handlers ─────────────────────────────────────────────────────────
 	authHandler      := handlers.NewAuthHandler(authService)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	boardHandler     := handlers.NewBoardHandler(boardService)
 	columnHandler    := handlers.NewColumnHandler(columnService)
 	cardHandler      := handlers.NewCardHandler(cardService)
-	documentHandler  := handlers.NewDocumentHandler(documentService)
+	documentHandler  := handlers.NewDocumentHandler(documentService, hub)
+	wsHandler        := handlers.NewWSHandler(hub, cfg)
 
-	// router
+	// ── router ────────────────────────────────────────────────────────────
 	r := router.Setup(
 		cfg,
 		authHandler,
@@ -57,6 +68,7 @@ func main() {
 		columnHandler,
 		cardHandler,
 		documentHandler,
+		wsHandler,
 		workspaceRepo,
 		boardRepo,
 		columnRepo,

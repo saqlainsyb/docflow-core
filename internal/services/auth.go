@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"time"
+	"fmt"
 
 	"github.com/saqlainsyb/docflow-core/internal/config"
 	"github.com/saqlainsyb/docflow-core/internal/models"
@@ -50,6 +51,11 @@ func (s *AuthService) Register(ctx context.Context, req models.RegisterRequest) 
 		// something else went wrong
 		return nil, err
 	}
+
+	// validate password strength — binding tag only checks min length
+if ok, reason := utils.ValidatePassword(req.Password); !ok {
+    return nil, fmt.Errorf("%w: %s", ErrWeakPassword, reason)
+}
 
 	// hash the password — never store plain text
 	hash, err := utils.HashPassword(req.Password)
@@ -224,4 +230,18 @@ func (s *AuthService) GetMe(ctx context.Context, userID string) (*models.UserPub
 		AvatarURL: user.AvatarURL,
 		CreatedAt: user.CreatedAt,
 	}, nil
+}
+
+// UpdateMe updates the authenticated user's name and/or avatar_url.
+// Both fields are optional — only provided fields are changed.
+func (s *AuthService) UpdateMe(ctx context.Context, userID string, req models.UpdateMeRequest) (*models.UserPublic, error) {
+	user, err := s.userRepo.Update(ctx, userID, req.Name, req.AvatarURL)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+
+	return user, nil
 }

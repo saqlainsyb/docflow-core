@@ -7,14 +7,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/saqlainsyb/docflow-core/internal/services"
 	"github.com/saqlainsyb/docflow-core/internal/utils"
+	"github.com/saqlainsyb/docflow-core/internal/ws"
 )
 
 type DocumentHandler struct {
 	documentService *services.DocumentService
+	hub             *ws.Hub
 }
 
-func NewDocumentHandler(documentService *services.DocumentService) *DocumentHandler {
-	return &DocumentHandler{documentService: documentService}
+func NewDocumentHandler(documentService *services.DocumentService, hub *ws.Hub) *DocumentHandler {
+	return &DocumentHandler{documentService: documentService, hub: hub}
 }
 
 // IssueToken handles POST /api/v1/documents/:id/token
@@ -27,13 +29,8 @@ func (h *DocumentHandler) IssueToken(c *gin.Context) {
 	userID := c.GetString("user_id")
 	memberRole := c.GetString("member_role")
 
-	resp, err := h.documentService.IssueToken(
-		c.Request.Context(),
-		documentID,
-		userID,
-		memberRole,
-		0, // connectedCount — will come from hub.RoomSize() after WebSocket is wired
-	)
+	connectedCount := h.hub.RoomSize(documentID)
+	resp, err := h.documentService.IssueToken(c.Request.Context(), documentID, userID, memberRole, connectedCount)
 	if err != nil {
 		handleDocumentError(c, err)
 		return
