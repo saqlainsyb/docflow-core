@@ -51,7 +51,7 @@ func main() {
 	cardService   := services.NewCardService(cardRepo, columnRepo, boardService, hub)
 
 	// ── handlers ─────────────────────────────────────────────────────────
-	authHandler      := handlers.NewAuthHandler(authService)
+	authHandler      := handlers.NewAuthHandler(authService, cfg)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	boardHandler     := handlers.NewBoardHandler(boardService)
 	columnHandler    := handlers.NewColumnHandler(columnService)

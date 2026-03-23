@@ -47,5 +47,5 @@ type UpdateMeRequest struct {
 type AuthResponse struct {
 	User         UserPublic `json:"user"`
 	AccessToken  string     `json:"access_token"`
-	RefreshToken string     `json:"refresh_token"`
+	RefreshToken string `json:"-"`
 }
