@@ -130,7 +130,8 @@ func (r *BoardRepository) FindByWorkspace(ctx context.Context, workspaceID, user
 			b.visibility,
 			b.created_at,
 			(SELECT COUNT(*) FROM board_members bm WHERE bm.board_id = b.id) AS member_count,
-			(SELECT COUNT(*) FROM cards c WHERE c.board_id = b.id AND c.archived = FALSE) AS card_count
+			(SELECT COUNT(*) FROM cards c WHERE c.board_id = b.id AND c.archived = FALSE) AS card_count,
+			b.updated_at
 		FROM boards b
 		WHERE b.workspace_id = $1
 		  AND (
@@ -162,6 +163,7 @@ func (r *BoardRepository) FindByWorkspace(ctx context.Context, workspaceID, user
 			&b.CreatedAt,
 			&b.MemberCount,
 			&b.CardCount,
+			&b.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

@@ -38,6 +38,7 @@ type BoardResponse struct {
 	MemberCount int       `json:"member_count"`
 	CardCount   int       `json:"card_count"`
 	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type BoardDetailResponse struct {
