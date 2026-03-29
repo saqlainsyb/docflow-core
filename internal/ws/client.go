@@ -50,7 +50,6 @@ type Client struct {
 	userID     string
 	color      string // assigned cursor colour for this editing session
 	documentID string
-	lastAwareness []byte
 }
 
 // NewClient constructs a Client. Called by the WebSocket handler after upgrade.

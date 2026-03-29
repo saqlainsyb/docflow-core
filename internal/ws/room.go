@@ -118,18 +118,10 @@ func (r *Room) Run() {
 			log.Printf("ws: user %s left doc %s (%d remaining)",
 				client.userID, r.documentID, len(r.clients))
 
-			// Do NOT broadcast a server-constructed null awareness here.
-			// A single MsgAwareness byte is not a valid Yjs awareness message —
-			// it carries no clientID, so y-websocket on the receiving end cannot
-			// identify which cursor to remove and silently ignores it, causing
-			// ghost cursors to accumulate on every refresh.
-			//
-			// Cursor cleanup is owned by the frontend: the disconnecting client
-			// calls provider.awareness.setLocalState(null) before destroying the
-			// provider, which causes y-websocket to encode a well-formed null
-			// awareness update (with the correct clientID) and send it over the
-			// socket before it closes. Peers receive that message, look up the
-			// clientID in their awareness map, and remove the cursor correctly.
+			// Broadcast a null awareness message for this client so other
+			// clients remove their cursor from the UI immediately.
+			nullAwareness := []byte{MsgAwareness}
+			r.fanout(nil, nullAwareness, false)
 
 			if len(r.clients) == 0 {
 				// Room is empty — exit the goroutine.
