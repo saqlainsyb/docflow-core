@@ -88,21 +88,31 @@ func (r *Room) Run() {
 			log.Printf("ws: user %s joined doc %s (%d connected)",
 				client.userID, r.documentID, len(r.clients))
 
-			// Send a Yjs SYNC_STEP_1 initiation to the new client.
-			// This is just the type byte — a minimal valid sync message.
-			// The real Yjs state vector exchange is handled by the frontend
-			// y-websocket client reacting to this signal.
-			//
-			// Format: [MsgSync][syncStep1=0]
-			// The frontend y-websocket client recognises this and responds
-			// with SYNC_STEP_2 carrying its state vector.
+			// Send SYNC_STEP_1 to new client (unchanged).
 			initMsg := []byte{MsgSync, 0}
 			select {
 			case client.send <- initMsg:
 			default:
-				// If we can't even send the init message, the client is already dead.
 				close(client.send)
 				delete(r.clients, client)
+				break
+			}
+
+			// NEW: ask every existing client to re-broadcast their awareness now.
+			// Without this, the new client waits up to several seconds (or forever
+			// if peers are idle) to see other cursors.
+			// MsgAwareness + subtype 0x00 is the y-websocket "query awareness" message —
+			// recipients respond by immediately re-sending their full awareness state.
+			awarenessQuery := []byte{MsgAwareness, 0x00}
+			for existing := range r.clients {
+				if existing == client {
+					continue
+				}
+				select {
+				case existing.send <- awarenessQuery:
+				default:
+					// Slow/dead — let it be cleaned up naturally on next write failure.
+				}
 			}
 
 		// ── client disconnected ────────────────────────────────────────────

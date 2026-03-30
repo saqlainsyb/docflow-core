@@ -20,6 +20,8 @@ const (
 	// MsgClose is sent by the server before it intentionally closes a connection,
 	// e.g. during graceful shutdown or when a token expires.
 	MsgClose = byte(0x02)
+
+	MsgAwarenessQuery = 0x03
 )
 
 // Board WebSocket event type strings.
