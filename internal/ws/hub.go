@@ -191,21 +191,20 @@ func (h *Hub) BroadcastToBoard(boardID string, payload any) {
 // When a card moves, the hub calls BroadcastToBoard and every connected
 // tab updates its UI without polling.
 type BoardRoom struct {
-	boardID   string
-	clients   map[*BoardClient]bool
-	broadcast chan []byte
-	register  chan *BoardClient
+	boardID    string
+	clients    map[*BoardClient]bool
+	broadcast  chan []byte
+	register   chan *BoardClient
 	unregister chan *BoardClient
-	done      chan struct{}
+	done       chan struct{}
 }
 
 // BoardClient represents one browser tab connected to the board event stream.
 type BoardClient struct {
-	conn *websocket.Conn
-	send chan []byte
+	conn   *websocket.Conn
+	send   chan []byte
 	userID string
 }
-
 
 // NewBoardClient constructs a BoardClient after a successful WebSocket upgrade.
 func NewBoardClient(conn *websocket.Conn, userID string) *BoardClient {
@@ -271,7 +270,6 @@ func (c *BoardClient) WritePump() {
 	}
 }
 
-
 // NewBoardRoom constructs a BoardRoom.
 func NewBoardRoom(boardID string) *BoardRoom {
 	return &BoardRoom{
@@ -292,8 +290,21 @@ func (r *BoardRoom) Run() {
 		select {
 		case client := <-r.register:
 			r.clients[client] = true
-			log.Printf("hub: user %s joined board room %s (%d connected)",
-				client.userID, r.boardID, len(r.clients))
+			// Broadcast join to everyone except the joiner
+			joinMsg, _ := json.Marshal(map[string]any{
+				"type":    EvtUserJoined,
+				"user_id": client.userID,
+				// Note: userID is all you have here — name isn't stored on BoardClient.
+				// Either add name to BoardClient at connection time, or resolve on the frontend.
+			})
+			for c := range r.clients {
+				if c != client {
+					select {
+					case c.send <- joinMsg:
+					default:
+					}
+				}
+			}
 
 		case client := <-r.unregister:
 			if _, ok := r.clients[client]; !ok {

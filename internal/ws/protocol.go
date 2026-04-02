@@ -39,4 +39,6 @@ const (
 	EvtColumnRenamed   = "COLUMN_RENAMED"
 	EvtColumnReordered = "COLUMN_REORDERED"
 	EvtColumnDeleted   = "COLUMN_DELETED"
+	EvtUserJoined = "USER_JOINED"
+	EvtUserLeft   = "USER_LEFT"
 )
