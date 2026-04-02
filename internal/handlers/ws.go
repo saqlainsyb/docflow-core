@@ -147,7 +147,7 @@ func (h *WSHandler) HandleBoardWS(c *gin.Context) {
 
 	room := h.hub.GetOrCreateBoardRoom(boardID)
 
-	client := ws.NewBoardClient(conn, claims.UserID)
+	client := ws.NewBoardClient(conn, claims.UserID, claims.Name)
 
 	room.Register(client)
 

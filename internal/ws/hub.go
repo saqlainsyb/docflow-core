@@ -204,14 +204,16 @@ type BoardClient struct {
 	conn   *websocket.Conn
 	send   chan []byte
 	userID string
+	name   string 
 }
 
 // NewBoardClient constructs a BoardClient after a successful WebSocket upgrade.
-func NewBoardClient(conn *websocket.Conn, userID string) *BoardClient {
+func NewBoardClient(conn *websocket.Conn, userID string, name string) *BoardClient {
 	return &BoardClient{
 		conn:   conn,
 		send:   make(chan []byte, 256),
 		userID: userID,
+		name:   name, 
 	}
 }
 
@@ -294,8 +296,7 @@ func (r *BoardRoom) Run() {
 			joinMsg, _ := json.Marshal(map[string]any{
 				"type":    EvtUserJoined,
 				"user_id": client.userID,
-				// Note: userID is all you have here — name isn't stored on BoardClient.
-				// Either add name to BoardClient at connection time, or resolve on the frontend.
+				"name":    client.name,
 			})
 			for c := range r.clients {
 				if c != client {
