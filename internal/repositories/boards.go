@@ -232,14 +232,27 @@ func (r *BoardRepository) GetBoardDetail(ctx context.Context, boardID string) (*
 	}
 
 	// fetch board members
-	memberRows, err := r.db.Query(ctx, `
-		SELECT u.id, u.name, u.email, u.avatar_url, wm.role, wm.joined_at
-		FROM board_members bm
-		JOIN users u ON u.id = bm.user_id
-		JOIN workspace_members wm ON wm.user_id = bm.user_id AND wm.workspace_id = $1
-		WHERE bm.board_id = $2
-		ORDER BY bm.added_at ASC
-	`, board.WorkspaceID, boardID)
+	// For workspace-visibility boards: return all workspace members (they all have access).
+	// For private boards: return only explicit board_members rows.
+	var memberRows pgx.Rows
+	if board.Visibility == "workspace" {
+		memberRows, err = r.db.Query(ctx, `
+        SELECT u.id, u.name, u.email, u.avatar_url, wm.role, wm.joined_at
+        FROM workspace_members wm
+        JOIN users u ON u.id = wm.user_id
+        WHERE wm.workspace_id = $1
+        ORDER BY wm.joined_at ASC
+    `, board.WorkspaceID)
+	} else {
+		memberRows, err = r.db.Query(ctx, `
+        SELECT u.id, u.name, u.email, u.avatar_url, wm.role, wm.joined_at
+        FROM board_members bm
+        JOIN users u ON u.id = bm.user_id
+        JOIN workspace_members wm ON wm.user_id = bm.user_id AND wm.workspace_id = $1
+        WHERE bm.board_id = $2
+        ORDER BY bm.added_at ASC
+    `, board.WorkspaceID, boardID)
+	}
 	if err != nil {
 		return nil, err
 	}
