@@ -14,6 +14,7 @@ type Config struct {
 	AppEnv  string
 	AppPort string
 	AppURL  string
+	FrontendURL string 
 
 	// Database
 	DatabaseURL string
@@ -49,6 +50,7 @@ func Load() *Config {
 		AppEnv:  getEnv("APP_ENV", "development"),
 		AppPort: getEnv("APP_PORT", "8080"),
 		AppURL:  getEnv("APP_URL", "http://localhost:8080"),
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		DatabaseURL: mustGetEnv("DATABASE_URL"),
 		RedisURL:    mustGetEnv("REDIS_URL"),

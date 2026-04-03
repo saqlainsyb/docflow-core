@@ -192,7 +192,7 @@ func (s *BoardService) GenerateShareLink(ctx context.Context, boardID, userID, m
 	}
 
 	return &models.ShareLinkResponse{
-		URL:   s.cfg.AppURL + "/api/v1/share/" + token,
+		URL:   s.cfg.FrontendURL + "/share/" + token,
 		Token: token,
 	}, nil
 }
