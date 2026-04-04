@@ -18,11 +18,20 @@ func NewBoardRepository(db *pgxpool.Pool) *BoardRepository {
 	return &BoardRepository{db: db}
 }
 
-// Create inserts a new workspace-visibility board.
-// No transaction needed — single insert.
+// ── Board CRUD ────────────────────────────────────────────────────────────────
+
+// Create inserts a new board and adds the creator as 'owner' in board_members,
+// both in a single transaction. This applies regardless of visibility — every
+// board always has exactly one owner row in board_members.
 func (r *BoardRepository) Create(ctx context.Context, workspaceID, title, visibility, createdBy string) (*models.Board, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
 	board := &models.Board{}
-	err := r.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO boards (workspace_id, title, visibility, created_by)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id, workspace_id, title, visibility, share_token, created_by, created_at, updated_at
@@ -40,41 +49,12 @@ func (r *BoardRepository) Create(ctx context.Context, workspaceID, title, visibi
 		return nil, err
 	}
 
-	return board, nil
-}
-
-// CreatePrivate inserts a private board and adds the creator to board_members
-// in a single transaction. If either insert fails, both are rolled back —
-// preventing a private board with no members.
-func (r *BoardRepository) CreatePrivate(ctx context.Context, workspaceID, title, createdBy string) (*models.Board, error) {
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	board := &models.Board{}
-	err = tx.QueryRow(ctx, `
-		INSERT INTO boards (workspace_id, title, visibility, created_by)
-		VALUES ($1, $2, 'private', $3)
-		RETURNING id, workspace_id, title, visibility, share_token, created_by, created_at, updated_at
-	`, workspaceID, title, createdBy).Scan(
-		&board.ID,
-		&board.WorkspaceID,
-		&board.Title,
-		&board.Visibility,
-		&board.ShareToken,
-		&board.CreatedBy,
-		&board.CreatedAt,
-		&board.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-
+	// Always insert creator as board owner.
+	// For private boards this is the access gate; for workspace-visibility
+	// boards it still records who owns/controls the board.
 	_, err = tx.Exec(ctx, `
-		INSERT INTO board_members (board_id, user_id)
-		VALUES ($1, $2)
+		INSERT INTO board_members (board_id, user_id, role)
+		VALUES ($1, $2, 'owner')
 	`, board.ID, createdBy)
 	if err != nil {
 		return nil, err
@@ -88,7 +68,6 @@ func (r *BoardRepository) CreatePrivate(ctx context.Context, workspaceID, title,
 }
 
 // FindByID looks up a board by UUID.
-// Returns ErrNotFound if no board exists with that ID.
 func (r *BoardRepository) FindByID(ctx context.Context, id string) (*models.Board, error) {
 	board := &models.Board{}
 	err := r.db.QueryRow(ctx, `
@@ -116,11 +95,8 @@ func (r *BoardRepository) FindByID(ctx context.Context, id string) (*models.Boar
 }
 
 // FindByWorkspace returns all boards in a workspace visible to the given user.
-// Workspace-visibility boards: visible to all workspace members.
-// Private boards: only visible if the user is an explicit board member,
-// or if they are an owner/admin (checked in the service layer via role).
-// We return all boards here and let the service filter by role if needed —
-// but we do filter out private boards the user has no membership in.
+// Workspace-visibility boards are visible to all workspace members.
+// Private boards are visible only to explicit board_members or workspace owner/admin.
 func (r *BoardRepository) FindByWorkspace(ctx context.Context, workspaceID, userID string) ([]models.BoardResponse, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT
@@ -174,7 +150,6 @@ func (r *BoardRepository) FindByWorkspace(ctx context.Context, workspaceID, user
 }
 
 // Update changes a board's title and/or visibility.
-// Only updates fields that are provided — nil fields are left unchanged.
 func (r *BoardRepository) Update(ctx context.Context, id string, title, visibility *string) (*models.Board, error) {
 	board := &models.Board{}
 	err := r.db.QueryRow(ctx, `
@@ -220,58 +195,18 @@ func (r *BoardRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// GetBoardDetail returns the full board with nested columns and cards.
-// Columns and cards are fetched in a single JOIN query ordered by position.
-// The flat rows are assembled into the nested ColumnWithCards structure in Go.
-// Cards include the assignee (nullable) and document_id.
+// GetBoardDetail returns the full board with nested columns, cards, and members.
 func (r *BoardRepository) GetBoardDetail(ctx context.Context, boardID string) (*models.BoardDetailResponse, error) {
-	// first fetch the board itself
 	board, err := r.FindByID(ctx, boardID)
 	if err != nil {
 		return nil, err
 	}
 
-	// fetch board members
-	// For workspace-visibility boards: return all workspace members (they all have access).
-	// For private boards: return only explicit board_members rows.
-	var memberRows pgx.Rows
-	if board.Visibility == "workspace" {
-		memberRows, err = r.db.Query(ctx, `
-        SELECT u.id, u.name, u.email, u.avatar_url, wm.role, wm.joined_at
-        FROM workspace_members wm
-        JOIN users u ON u.id = wm.user_id
-        WHERE wm.workspace_id = $1
-        ORDER BY wm.joined_at ASC
-    `, board.WorkspaceID)
-	} else {
-		memberRows, err = r.db.Query(ctx, `
-        SELECT u.id, u.name, u.email, u.avatar_url, wm.role, wm.joined_at
-        FROM board_members bm
-        JOIN users u ON u.id = bm.user_id
-        JOIN workspace_members wm ON wm.user_id = bm.user_id AND wm.workspace_id = $1
-        WHERE bm.board_id = $2
-        ORDER BY bm.added_at ASC
-    `, board.WorkspaceID, boardID)
-	}
+	members, err := r.ListBoardMembers(ctx, boardID)
 	if err != nil {
 		return nil, err
 	}
-	defer memberRows.Close()
 
-	var members []models.MemberResponse
-	for memberRows.Next() {
-		var m models.MemberResponse
-		if err := memberRows.Scan(&m.UserID, &m.Name, &m.Email, &m.AvatarURL, &m.Role, &m.JoinedAt); err != nil {
-			return nil, err
-		}
-		members = append(members, m)
-	}
-	if err := memberRows.Err(); err != nil {
-		return nil, err
-	}
-
-	// fetch columns + cards in one query ordered by position
-	// LEFT JOIN means columns with no cards still appear
 	rows, err := r.db.Query(ctx, `
 		SELECT
 			col.id,
@@ -304,9 +239,8 @@ func (r *BoardRepository) GetBoardDetail(ctx context.Context, boardID string) (*
 	}
 	defer rows.Close()
 
-	// assemble flat rows into nested columns → cards
 	columnMap := make(map[string]*models.ColumnWithCards)
-	columnOrder := []string{} // preserve position order
+	columnOrder := []string{}
 
 	for rows.Next() {
 		var (
@@ -314,7 +248,6 @@ func (r *BoardRepository) GetBoardDetail(ctx context.Context, boardID string) (*
 			colPos          float64
 			colCreatedAt    time.Time
 
-			// card fields — all nullable because of LEFT JOIN
 			cardID         *string
 			cardTitle      *string
 			cardPos        *float64
@@ -337,7 +270,6 @@ func (r *BoardRepository) GetBoardDetail(ctx context.Context, boardID string) (*
 			return nil, err
 		}
 
-		// register column if first time seeing it
 		if _, exists := columnMap[colID]; !exists {
 			columnMap[colID] = &models.ColumnWithCards{
 				ID:        colID,
@@ -350,7 +282,6 @@ func (r *BoardRepository) GetBoardDetail(ctx context.Context, boardID string) (*
 			columnOrder = append(columnOrder, colID)
 		}
 
-		// only add a card row if a card actually exists (LEFT JOIN)
 		if cardID == nil {
 			continue
 		}
@@ -389,14 +320,13 @@ func (r *BoardRepository) GetBoardDetail(ctx context.Context, boardID string) (*
 		return nil, err
 	}
 
-	// build ordered slice from map
 	columns := make([]models.ColumnWithCards, 0, len(columnOrder))
 	for _, id := range columnOrder {
 		columns = append(columns, *columnMap[id])
 	}
 
 	if members == nil {
-		members = []models.MemberResponse{}
+		members = []models.BoardMember{}
 	}
 
 	return &models.BoardDetailResponse{
@@ -410,8 +340,8 @@ func (r *BoardRepository) GetBoardDetail(ctx context.Context, boardID string) (*
 	}, nil
 }
 
-// FindByShareToken looks up a board by its public share token.
-// Returns ErrNotFound if the token doesn't exist or has been revoked (set to NULL).
+// ── Share link ────────────────────────────────────────────────────────────────
+
 func (r *BoardRepository) FindByShareToken(ctx context.Context, token string) (*models.Board, error) {
 	board := &models.Board{}
 	err := r.db.QueryRow(ctx, `
@@ -438,8 +368,6 @@ func (r *BoardRepository) FindByShareToken(ctx context.Context, token string) (*
 	return board, nil
 }
 
-// SetShareToken sets or clears the share token on a board.
-// Pass nil to revoke (sets share_token = NULL).
 func (r *BoardRepository) SetShareToken(ctx context.Context, boardID string, token *string) error {
 	result, err := r.db.Exec(ctx, `
 		UPDATE boards SET share_token = $1, updated_at = NOW() WHERE id = $2
@@ -455,19 +383,72 @@ func (r *BoardRepository) SetShareToken(ctx context.Context, boardID string, tok
 	return nil
 }
 
-// AddBoardMember inserts an explicit board membership row.
-// Used for private boards — workspace-visibility boards don't need this.
-func (r *BoardRepository) AddBoardMember(ctx context.Context, boardID, userID string) error {
+// ── Board membership ──────────────────────────────────────────────────────────
+
+// GetBoardMemberRole returns the board-level role for a specific user.
+// Returns ErrNotFound if the user has no row in board_members.
+func (r *BoardRepository) GetBoardMemberRole(ctx context.Context, boardID, userID string) (string, error) {
+	var role string
+	err := r.db.QueryRow(ctx, `
+		SELECT role FROM board_members
+		WHERE board_id = $1 AND user_id = $2
+	`, boardID, userID).Scan(&role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+
+	return role, nil
+}
+
+// IsBoardMember returns true if the user has an explicit board_members row.
+func (r *BoardRepository) IsBoardMember(ctx context.Context, boardID, userID string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM board_members
+			WHERE board_id = $1 AND user_id = $2
+		)
+	`, boardID, userID).Scan(&exists)
+
+	return exists, err
+}
+
+// AddBoardMember inserts an explicit board membership row with the given role.
+// ON CONFLICT DO NOTHING — callers should check IsBoardMember first if they
+// need to distinguish "already member" from a successful insert.
+func (r *BoardRepository) AddBoardMember(ctx context.Context, boardID, userID, role string) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO board_members (board_id, user_id)
-		VALUES ($1, $2)
-		ON CONFLICT DO NOTHING
-	`, boardID, userID)
+		INSERT INTO board_members (board_id, user_id, role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (board_id, user_id) DO NOTHING
+	`, boardID, userID, role)
 
 	return err
 }
 
+// UpdateBoardMemberRole changes the board role of an existing member.
+// Returns ErrNotFound if the user is not a board member.
+func (r *BoardRepository) UpdateBoardMemberRole(ctx context.Context, boardID, userID, role string) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE board_members SET role = $1
+		WHERE board_id = $2 AND user_id = $3
+	`, role, boardID, userID)
+	if err != nil {
+		return err
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
 // RemoveBoardMember deletes an explicit board membership row.
+// Returns ErrNotFound if the user is not a board member.
 func (r *BoardRepository) RemoveBoardMember(ctx context.Context, boardID, userID string) error {
 	result, err := r.db.Exec(ctx, `
 		DELETE FROM board_members WHERE board_id = $1 AND user_id = $2
@@ -483,39 +464,88 @@ func (r *BoardRepository) RemoveBoardMember(ctx context.Context, boardID, userID
 	return nil
 }
 
-// IsBoardMember returns true if the user has an explicit board_members row.
-// Used to check access for private boards.
-func (r *BoardRepository) IsBoardMember(ctx context.Context, boardID, userID string) (bool, error) {
-	var exists bool
-	err := r.db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM board_members
-			WHERE board_id = $1 AND user_id = $2
-		)
-	`, boardID, userID).Scan(&exists)
+// TransferOwnership atomically moves the 'owner' role from one user to another.
+// The previous owner is downgraded to 'admin'.
+// The new owner must already be a board member.
+// Uses a single transaction with row-level locking to prevent races.
+func (r *BoardRepository) TransferOwnership(ctx context.Context, boardID, fromUserID, toUserID string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
 
-	return exists, err
+	// Lock both rows upfront to prevent concurrent transfers.
+	var fromRole, toRole string
+	err = tx.QueryRow(ctx, `
+		SELECT role FROM board_members
+		WHERE board_id = $1 AND user_id = $2
+		FOR UPDATE
+	`, boardID, fromUserID).Scan(&fromRole)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	err = tx.QueryRow(ctx, `
+		SELECT role FROM board_members
+		WHERE board_id = $1 AND user_id = $2
+		FOR UPDATE
+	`, boardID, toUserID).Scan(&toRole)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound // target user must already be a board member
+		}
+		return err
+	}
+
+	// Downgrade current owner to admin.
+	if _, err = tx.Exec(ctx, `
+		UPDATE board_members SET role = 'admin'
+		WHERE board_id = $1 AND user_id = $2
+	`, boardID, fromUserID); err != nil {
+		return err
+	}
+
+	// Elevate new owner.
+	if _, err = tx.Exec(ctx, `
+		UPDATE board_members SET role = 'owner'
+		WHERE board_id = $1 AND user_id = $2
+	`, boardID, toUserID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
-// ListBoardMembers returns all explicit members of a board with their details.
-func (r *BoardRepository) ListBoardMembers(ctx context.Context, boardID, workspaceID string) ([]models.MemberResponse, error) {
+// ListBoardMembers returns all explicit members of a board with their board role.
+// The board role (owner/admin/editor) is read directly from board_members —
+// it does NOT reflect the workspace role.
+func (r *BoardRepository) ListBoardMembers(ctx context.Context, boardID string) ([]models.BoardMember, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT u.id, u.name, u.email, u.avatar_url, wm.role, bm.added_at
+		SELECT u.id, u.name, u.email, u.avatar_url, bm.role, bm.added_at
 		FROM board_members bm
 		JOIN users u ON u.id = bm.user_id
-		JOIN workspace_members wm ON wm.user_id = bm.user_id AND wm.workspace_id = $1
-		WHERE bm.board_id = $2
-		ORDER BY bm.added_at ASC
-	`, workspaceID, boardID)
+		WHERE bm.board_id = $1
+		ORDER BY
+			CASE bm.role
+				WHEN 'owner'  THEN 1
+				WHEN 'admin'  THEN 2
+				WHEN 'editor' THEN 3
+			END,
+			bm.added_at ASC
+	`, boardID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var members []models.MemberResponse
+	var members []models.BoardMember
 	for rows.Next() {
-		var m models.MemberResponse
-		if err := rows.Scan(&m.UserID, &m.Name, &m.Email, &m.AvatarURL, &m.Role, &m.JoinedAt); err != nil {
+		var m models.BoardMember
+		if err := rows.Scan(&m.UserID, &m.Name, &m.Email, &m.AvatarURL, &m.BoardRole, &m.AddedAt); err != nil {
 			return nil, err
 		}
 		members = append(members, m)

@@ -7,12 +7,17 @@ import (
 	"github.com/saqlainsyb/docflow-core/internal/utils"
 )
 
-// Board resolves the board from :id in the URL, finds its workspace,
-// checks that the authenticated user is a workspace member, and injects
-// workspace_id and member_role into the Gin context.
-// Must run after the Auth middleware — depends on user_id being present.
-// Board-level access control (private vs workspace visibility) is handled
-// in the service layer after this middleware passes.
+// Board resolves the board from :id in the URL, verifies the caller is a
+// workspace member, then resolves and injects the caller's effective board role.
+//
+// Injected context keys:
+//   - "workspace_id"  — the board's parent workspace UUID
+//   - "member_role"   — the caller's workspace role (owner / admin / member)
+//   - "board_role"    — the caller's effective board role (owner / admin / editor)
+//
+// Board-level access for private boards is enforced in the service layer —
+// this middleware only confirms workspace membership and prepares the roles.
+// Must run after the Auth middleware (depends on "user_id" being present).
 func Board(
 	boardRepo *repositories.BoardRepository,
 	workspaceRepo *repositories.WorkspaceRepository,
@@ -33,7 +38,7 @@ func Board(
 
 		userID := c.GetString("user_id")
 
-		// look up the board to get its workspace_id
+		// Fetch the board to get its workspace.
 		board, err := boardRepo.FindByID(c.Request.Context(), boardID)
 		if err != nil {
 			if err == repositories.ErrNotFound {
@@ -46,7 +51,7 @@ func Board(
 			return
 		}
 
-		// check the user is a workspace member and get their role
+		// Confirm workspace membership and get workspace role.
 		member, err := workspaceRepo.GetMember(c.Request.Context(), board.WorkspaceID, userID)
 		if err != nil {
 			if err == repositories.ErrNotFound {
@@ -59,10 +64,45 @@ func Board(
 			return
 		}
 
-		// inject so handlers and services can read them
+		// Look up the caller's explicit board role (may not exist).
+		boardMemberRole, err := boardRepo.GetBoardMemberRole(c.Request.Context(), boardID, userID)
+		if err != nil && err != repositories.ErrNotFound {
+			utils.ErrInternal(c)
+			c.Abort()
+			return
+		}
+
+		// Resolve effective board role.
+		//
+		//   explicit owner in board_members → "owner"
+		//   workspace owner/admin            → "admin" (minimum)
+		//   explicit board role              → that role
+		//   workspace member, no board role  → "editor" (default)
+		//
+		// Note: for private boards, a workspace member with boardMemberRole == ""
+		// (no board_members row) will be denied access by the service layer;
+		// we still inject "editor" here but the service checkAccess() rejects them.
+		effectiveBoardRole := resolveBoardRole(member.Role, boardMemberRole)
+
 		c.Set("workspace_id", board.WorkspaceID)
-		c.Set("member_role", member.Role)
+		c.Set("member_role", member.Role)       // workspace role — used by workspace-level checks
+		c.Set("board_role", effectiveBoardRole)  // board role    — used by board-level checks
 
 		c.Next()
 	}
+}
+
+// resolveBoardRole combines the workspace role and the explicit board_members role
+// into a single effective board role.
+func resolveBoardRole(workspaceRole, boardMemberRole string) string {
+	if boardMemberRole == "owner" {
+		return "owner"
+	}
+	if workspaceRole == "owner" || workspaceRole == "admin" {
+		return "admin"
+	}
+	if boardMemberRole != "" {
+		return boardMemberRole
+	}
+	return "editor"
 }

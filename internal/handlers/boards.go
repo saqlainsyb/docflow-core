@@ -19,7 +19,6 @@ func NewBoardHandler(boardService *services.BoardService) *BoardHandler {
 }
 
 // ListBoards handles GET /api/v1/workspaces/:id/boards
-// Returns all boards in the workspace visible to the requesting user.
 func (h *BoardHandler) ListBoards(c *gin.Context) {
 	workspaceID := c.GetString("workspace_id")
 	userID := c.GetString("user_id")
@@ -38,7 +37,7 @@ func (h *BoardHandler) ListBoards(c *gin.Context) {
 }
 
 // CreateBoard handles POST /api/v1/workspaces/:id/boards
-// Any workspace member can create a board.
+// Any workspace member can create a board. Creator is automatically board owner.
 func (h *BoardHandler) CreateBoard(c *gin.Context) {
 	var req models.CreateBoardRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -59,14 +58,13 @@ func (h *BoardHandler) CreateBoard(c *gin.Context) {
 }
 
 // GetBoardDetail handles GET /api/v1/boards/:id
-// Returns the full board with nested columns and cards.
-// Board ID comes from the URL — not from the workspace middleware.
 func (h *BoardHandler) GetBoardDetail(c *gin.Context) {
 	boardID := c.Param("id")
 	userID := c.GetString("user_id")
-	memberRole := c.GetString("member_role")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
 
-	board, err := h.boardService.GetBoardDetail(c.Request.Context(), boardID, userID, memberRole)
+	board, err := h.boardService.GetBoardDetail(c.Request.Context(), boardID, userID, workspaceRole, boardRole)
 	if err != nil {
 		handleBoardError(c, err)
 		return
@@ -76,7 +74,7 @@ func (h *BoardHandler) GetBoardDetail(c *gin.Context) {
 }
 
 // UpdateBoard handles PATCH /api/v1/boards/:id
-// Updates title and/or visibility.
+// Rename: board owner or admin. Change visibility: board owner only.
 func (h *BoardHandler) UpdateBoard(c *gin.Context) {
 	var req models.UpdateBoardRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -86,9 +84,10 @@ func (h *BoardHandler) UpdateBoard(c *gin.Context) {
 
 	boardID := c.Param("id")
 	userID := c.GetString("user_id")
-	memberRole := c.GetString("member_role")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
 
-	board, err := h.boardService.UpdateBoard(c.Request.Context(), boardID, userID, memberRole, req)
+	board, err := h.boardService.UpdateBoard(c.Request.Context(), boardID, userID, workspaceRole, boardRole, req)
 	if err != nil {
 		handleBoardError(c, err)
 		return
@@ -98,13 +97,14 @@ func (h *BoardHandler) UpdateBoard(c *gin.Context) {
 }
 
 // DeleteBoard handles DELETE /api/v1/boards/:id
-// Requires workspace owner role.
+// Board owner or workspace owner only.
 func (h *BoardHandler) DeleteBoard(c *gin.Context) {
 	boardID := c.Param("id")
 	userID := c.GetString("user_id")
-	memberRole := c.GetString("member_role")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
 
-	if err := h.boardService.DeleteBoard(c.Request.Context(), boardID, userID, memberRole); err != nil {
+	if err := h.boardService.DeleteBoard(c.Request.Context(), boardID, userID, workspaceRole, boardRole); err != nil {
 		handleBoardError(c, err)
 		return
 	}
@@ -116,23 +116,23 @@ func (h *BoardHandler) DeleteBoard(c *gin.Context) {
 func (h *BoardHandler) ListBoardMembers(c *gin.Context) {
 	boardID := c.Param("id")
 	userID := c.GetString("user_id")
-	memberRole := c.GetString("member_role")
+	workspaceRole := c.GetString("member_role")
 
-	members, err := h.boardService.ListBoardMembers(c.Request.Context(), boardID, userID, memberRole)
+	members, err := h.boardService.ListBoardMembers(c.Request.Context(), boardID, userID, workspaceRole)
 	if err != nil {
 		handleBoardError(c, err)
 		return
 	}
 
 	if members == nil {
-		members = []models.MemberResponse{}
+		members = []models.BoardMember{}
 	}
 
 	c.JSON(http.StatusOK, members)
 }
 
 // AddBoardMember handles POST /api/v1/boards/:id/members
-// Requires admin or owner workspace role.
+// Board owner or admin. Admins can only add editors.
 func (h *BoardHandler) AddBoardMember(c *gin.Context) {
 	var req models.AddBoardMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -141,10 +141,11 @@ func (h *BoardHandler) AddBoardMember(c *gin.Context) {
 	}
 
 	boardID := c.Param("id")
-	userID := c.GetString("user_id")
-	memberRole := c.GetString("member_role")
+	requesterID := c.GetString("user_id")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
 
-	if err := h.boardService.AddBoardMember(c.Request.Context(), boardID, userID, memberRole, req); err != nil {
+	if err := h.boardService.AddBoardMember(c.Request.Context(), boardID, requesterID, workspaceRole, boardRole, req); err != nil {
 		handleBoardError(c, err)
 		return
 	}
@@ -153,14 +154,62 @@ func (h *BoardHandler) AddBoardMember(c *gin.Context) {
 }
 
 // RemoveBoardMember handles DELETE /api/v1/boards/:id/members/:uid
-// Requires admin or owner workspace role.
+// Board owner or admin. Cannot remove the board owner.
 func (h *BoardHandler) RemoveBoardMember(c *gin.Context) {
 	boardID := c.Param("id")
 	targetUserID := c.Param("uid")
 	requesterID := c.GetString("user_id")
-	memberRole := c.GetString("member_role")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
 
-	if err := h.boardService.RemoveBoardMember(c.Request.Context(), boardID, targetUserID, requesterID, memberRole); err != nil {
+	if err := h.boardService.RemoveBoardMember(c.Request.Context(), boardID, targetUserID, requesterID, workspaceRole, boardRole); err != nil {
+		handleBoardError(c, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// UpdateBoardMemberRole handles PATCH /api/v1/boards/:id/members/:uid
+// Board owner only. Changes a member's role between admin and editor.
+// To change the owner, use the transfer-ownership endpoint instead.
+func (h *BoardHandler) UpdateBoardMemberRole(c *gin.Context) {
+	var req models.UpdateBoardMemberRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		return
+	}
+
+	boardID := c.Param("id")
+	targetUserID := c.Param("uid")
+	requesterID := c.GetString("user_id")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
+
+	if err := h.boardService.UpdateBoardMemberRole(c.Request.Context(), boardID, targetUserID, requesterID, workspaceRole, boardRole, req); err != nil {
+		handleBoardError(c, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// TransferOwnership handles POST /api/v1/boards/:id/transfer
+// Board owner only. Target must already be a board member.
+// Previous owner is downgraded to admin atomically.
+func (h *BoardHandler) TransferOwnership(c *gin.Context) {
+	var req models.TransferOwnershipRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		return
+	}
+
+	boardID := c.Param("id")
+	requesterID := c.GetString("user_id")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
+
+	if err := h.boardService.TransferOwnership(c.Request.Context(), boardID, requesterID, workspaceRole, boardRole, req); err != nil {
 		handleBoardError(c, err)
 		return
 	}
@@ -169,13 +218,14 @@ func (h *BoardHandler) RemoveBoardMember(c *gin.Context) {
 }
 
 // GenerateShareLink handles POST /api/v1/boards/:id/share-link
-// Requires admin or owner workspace role.
+// Board owner or admin.
 func (h *BoardHandler) GenerateShareLink(c *gin.Context) {
 	boardID := c.Param("id")
 	userID := c.GetString("user_id")
-	memberRole := c.GetString("member_role")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
 
-	resp, err := h.boardService.GenerateShareLink(c.Request.Context(), boardID, userID, memberRole)
+	resp, err := h.boardService.GenerateShareLink(c.Request.Context(), boardID, userID, workspaceRole, boardRole)
 	if err != nil {
 		handleBoardError(c, err)
 		return
@@ -185,13 +235,14 @@ func (h *BoardHandler) GenerateShareLink(c *gin.Context) {
 }
 
 // RevokeShareLink handles DELETE /api/v1/boards/:id/share-link
-// Requires admin or owner workspace role.
+// Board owner or admin.
 func (h *BoardHandler) RevokeShareLink(c *gin.Context) {
 	boardID := c.Param("id")
 	userID := c.GetString("user_id")
-	memberRole := c.GetString("member_role")
+	workspaceRole := c.GetString("member_role")
+	boardRole := c.GetString("board_role")
 
-	if err := h.boardService.RevokeShareLink(c.Request.Context(), boardID, userID, memberRole); err != nil {
+	if err := h.boardService.RevokeShareLink(c.Request.Context(), boardID, userID, workspaceRole, boardRole); err != nil {
 		handleBoardError(c, err)
 		return
 	}
@@ -213,7 +264,7 @@ func (h *BoardHandler) GetPublicBoard(c *gin.Context) {
 	c.JSON(http.StatusOK, board)
 }
 
-// handleBoardError maps service errors to the correct HTTP response.
+// handleBoardError maps service errors to HTTP responses.
 func handleBoardError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, services.ErrNotFound):
@@ -222,6 +273,14 @@ func handleBoardError(c *gin.Context, err error) {
 		utils.ErrorResponse(c, http.StatusForbidden, "BOARD_ACCESS_DENIED", "you do not have access to this board")
 	case errors.Is(err, services.ErrInsufficientPermissions):
 		utils.ErrorResponse(c, http.StatusForbidden, "INSUFFICIENT_PERMISSIONS", "you do not have permission to perform this action")
+	case errors.Is(err, services.ErrAlreadyBoardMember):
+		utils.ErrorResponse(c, http.StatusConflict, "ALREADY_BOARD_MEMBER", "user is already a member of this board")
+	case errors.Is(err, services.ErrCannotRemoveBoardOwner):
+		utils.ErrorResponse(c, http.StatusForbidden, "CANNOT_REMOVE_BOARD_OWNER", "cannot remove the board owner — transfer ownership first")
+	case errors.Is(err, services.ErrTargetNotBoardMember):
+		utils.ErrorResponse(c, http.StatusUnprocessableEntity, "TARGET_NOT_BOARD_MEMBER", "target user must already be a board member")
+	case errors.Is(err, services.ErrUserNotFound):
+		utils.ErrorResponse(c, http.StatusNotFound, "USER_NOT_FOUND", "user not found or not a workspace member")
 	default:
 		utils.ErrInternal(c)
 	}

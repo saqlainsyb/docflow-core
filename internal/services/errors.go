@@ -9,15 +9,15 @@ var (
 	ErrInvalidRefreshToken = errors.New("invalid refresh token")
 	ErrRefreshTokenExpired = errors.New("refresh token expired")
 	ErrTokenTheftDetected  = errors.New("token theft detected")
-	ErrWeakPassword = errors.New("password does not meet requirements")
+	ErrWeakPassword        = errors.New("password does not meet requirements")
 )
 
 // Resource errors
 var (
-	ErrNotFound            = errors.New("resource not found")
-	ErrForbidden           = errors.New("forbidden")
-	ErrConflict            = errors.New("conflict")
-	ErrUserNotFound        = errors.New("user not found")
+	ErrNotFound     = errors.New("resource not found")
+	ErrForbidden    = errors.New("forbidden")
+	ErrConflict     = errors.New("conflict")
+	ErrUserNotFound = errors.New("user not found")
 )
 
 // Workspace errors
@@ -30,5 +30,8 @@ var (
 
 // Board errors
 var (
-	ErrBoardAccessDenied = errors.New("board access denied")
+	ErrBoardAccessDenied       = errors.New("board access denied")
+	ErrAlreadyBoardMember      = errors.New("user is already a board member")
+	ErrCannotRemoveBoardOwner  = errors.New("cannot remove the board owner — transfer ownership first")
+	ErrTargetNotBoardMember    = errors.New("target user must be an existing board member")
 )

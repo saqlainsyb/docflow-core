@@ -30,23 +30,20 @@ func Setup(
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
-	r.Use(middleware.CORS(cfg)) 
+	r.Use(middleware.CORS(cfg))
 	r.Use(middleware.RateLimit(cfg))
 
-	// health check — no auth required
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// ── WebSocket routes (/ws/... — outside /api/v1) ──────────────────────
-	// Auth is handled inside the handler via ?token= query param.
-	// Browser WebSocket API cannot set custom headers so token goes in URL.
+	// ── WebSocket routes ──────────────────────────────────────────────────────
 	r.GET("/ws/documents/:id", wsHandler.HandleDocumentWS)
 	r.GET("/ws/boards/:id",    wsHandler.HandleBoardWS)
 
 	api := r.Group("/api/v1")
 
-	// ── public routes ──────────────────────────────────────────────────────
+	// ── Public routes ─────────────────────────────────────────────────────────
 	auth := api.Group("/auth")
 	{
 		auth.POST("/register", authHandler.Register)
@@ -54,10 +51,9 @@ func Setup(
 		auth.POST("/refresh",  authHandler.Refresh)
 	}
 
-	// public share link — no auth required
 	api.GET("/share/:token", boardHandler.GetPublicBoard)
 
-	// ── protected routes — JWT required ───────────────────────────────────
+	// ── Protected routes — JWT required ───────────────────────────────────────
 	protected := api.Group("")
 	protected.Use(middleware.Auth(cfg))
 	{
@@ -65,11 +61,11 @@ func Setup(
 		protected.GET("/users/me",     authHandler.GetMe)
 		protected.PATCH("/users/me",   authHandler.UpdateMe)
 
-		// workspace routes
+		// Workspace routes
 		protected.GET("/workspaces",  workspaceHandler.ListWorkspaces)
 		protected.POST("/workspaces", workspaceHandler.CreateWorkspace)
 
-		// workspace-scoped routes
+		// Workspace-scoped routes
 		ws := protected.Group("/workspaces/:id")
 		ws.Use(middleware.Workspace(workspaceRepo))
 		{
@@ -84,22 +80,26 @@ func Setup(
 			ws.POST("/boards",         boardHandler.CreateBoard)
 		}
 
-		// board-scoped routes
+		// Board-scoped routes
+		// middleware.Board resolves workspace membership AND effective board role,
+		// injecting both "member_role" (workspace) and "board_role" into context.
 		board := protected.Group("/boards/:id")
 		board.Use(middleware.Board(boardRepo, workspaceRepo))
 		{
-			board.GET("",                 boardHandler.GetBoardDetail)
-			board.PATCH("",               boardHandler.UpdateBoard)
-			board.DELETE("",              boardHandler.DeleteBoard)
-			board.GET("/members",         boardHandler.ListBoardMembers)
-			board.POST("/members",        boardHandler.AddBoardMember)
-			board.DELETE("/members/:uid", boardHandler.RemoveBoardMember)
-			board.POST("/share-link",     boardHandler.GenerateShareLink)
-			board.DELETE("/share-link",   boardHandler.RevokeShareLink)
-			board.POST("/columns",        columnHandler.CreateColumn)
+			board.GET("",                  boardHandler.GetBoardDetail)
+			board.PATCH("",                boardHandler.UpdateBoard)
+			board.DELETE("",               boardHandler.DeleteBoard)
+			board.GET("/members",          boardHandler.ListBoardMembers)
+			board.POST("/members",         boardHandler.AddBoardMember)
+			board.PATCH("/members/:uid",   boardHandler.UpdateBoardMemberRole) // new
+			board.DELETE("/members/:uid",  boardHandler.RemoveBoardMember)
+			board.POST("/transfer",        boardHandler.TransferOwnership)     // new
+			board.POST("/share-link",      boardHandler.GenerateShareLink)
+			board.DELETE("/share-link",    boardHandler.RevokeShareLink)
+			board.POST("/columns",         columnHandler.CreateColumn)
 		}
 
-		// column-scoped routes
+		// Column-scoped routes
 		col := protected.Group("/columns/:id")
 		col.Use(middleware.Column(columnRepo, boardRepo, workspaceRepo))
 		{
@@ -108,7 +108,7 @@ func Setup(
 			col.POST("/cards", cardHandler.CreateCard)
 		}
 
-		// card-scoped routes
+		// Card-scoped routes
 		card := protected.Group("/cards/:id")
 		card.Use(middleware.Card(cardRepo, boardRepo, workspaceRepo))
 		{
@@ -119,7 +119,7 @@ func Setup(
 			card.POST("/unarchive", cardHandler.UnarchiveCard)
 		}
 
-		// document-scoped routes
+		// Document-scoped routes
 		doc := protected.Group("/documents/:id")
 		doc.Use(middleware.Document(documentRepo, cardRepo, boardRepo, workspaceRepo))
 		{
