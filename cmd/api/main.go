@@ -11,8 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/saqlainsyb/docflow-core/internal/config"
 	"github.com/saqlainsyb/docflow-core/internal/db"
+	"github.com/saqlainsyb/docflow-core/internal/email"
 	"github.com/saqlainsyb/docflow-core/internal/handlers"
 	"github.com/saqlainsyb/docflow-core/internal/repositories"
 	"github.com/saqlainsyb/docflow-core/internal/router"
@@ -24,6 +27,19 @@ func main() {
 	// ── config ────────────────────────────────────────────────────────────
 	cfg := config.Load()
 	log.Printf("starting docflow in %s mode on port %s", cfg.AppEnv, cfg.AppPort)
+
+	// ── Logger ────────────────────────────────────────────────────────────────
+	var logger *zap.Logger
+	var err error
+	if cfg.IsDevelopment() {
+		logger, err = zap.NewDevelopment()
+	} else {
+		logger, err = zap.NewProduction()
+	}
+	if err != nil {
+		log.Fatalf("failed to initialize logger: %v", err)
+	}
+	defer logger.Sync()
 
 	// ── database connections ──────────────────────────────────────────────
 	dbPool := db.Connect(cfg)
@@ -37,12 +53,24 @@ func main() {
 	columnRepo       := repositories.NewColumnRepository(dbPool)
 	cardRepo         := repositories.NewCardRepository(dbPool)
 	documentRepo     := repositories.NewDocumentRepository(dbPool)
+	invitationRepo   := repositories.NewInvitationRepository(dbPool)
+
+	// ── Email client ──────────────────────────────────────────────────────────
+	// emailClient is always constructed — if RESEND_API_KEY is empty the client
+	// exists but all send calls will return an error (handled as non-fatal in
+	// the invitation service). This avoids nil checks everywhere.
+	emailClient := email.NewClient(cfg.ResendAPIKey, cfg.ResendFromAddr)
+ 
+	if !cfg.IsEmailConfigured() {
+		logger.Warn("RESEND_API_KEY is not set — invitation emails will not be delivered")
+	}
 
 	// ── services (partial — documentService needed by hub) ───────────────
 	authService      := services.NewAuthService(userRepo, refreshTokenRepo, workspaceRepo, cfg)
 	workspaceService := services.NewWorkspaceService(workspaceRepo, userRepo)
 	boardService     := services.NewBoardService(boardRepo, workspaceRepo, cfg)
 	documentService  := services.NewDocumentService(documentRepo, cardRepo, columnRepo, boardService, cfg)
+	invitationService := services.NewInvitationService(invitationRepo, workspaceRepo, userRepo, emailClient, cfg.FrontendURL)
 
 	// ── websocket hub ─────────────────────────────────────────────────────
 	hub := ws.NewHub(documentService)
@@ -55,6 +83,7 @@ func main() {
 	healthHandler    := handlers.NewHealthHandler(dbPool, redisClient)
 	authHandler      := handlers.NewAuthHandler(authService, cfg)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
+	invitationHandler := handlers.NewInvitationHandler(invitationService, logger)
 	boardHandler     := handlers.NewBoardHandler(boardService)
 	columnHandler    := handlers.NewColumnHandler(columnService)
 	cardHandler      := handlers.NewCardHandler(cardService)
@@ -70,6 +99,7 @@ func main() {
 		healthHandler,
 		authHandler,
 		workspaceHandler,
+		invitationHandler,
 		boardHandler,
 		columnHandler,
 		cardHandler,
@@ -103,9 +133,9 @@ func main() {
 	// Run in a goroutine so main() can proceed to the shutdown block below.
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("server listening on %s", server.Addr)
+		logger.Info("docflow started", zap.String("port", cfg.AppPort))
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErr <- err
+			logger.Fatal("server failed", zap.Error(err))
 		}
 	}()
 

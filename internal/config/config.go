@@ -1,3 +1,4 @@
+// internal/config/config.go
 package config
 
 import (
@@ -11,10 +12,10 @@ import (
 
 type Config struct {
 	// Server
-	AppEnv  string
-	AppPort string
-	AppURL  string
-	FrontendURL string 
+	AppEnv      string
+	AppPort     string
+	AppURL      string
+	FrontendURL string
 
 	// Database
 	DatabaseURL string
@@ -39,6 +40,10 @@ type Config struct {
 	// Rate Limiting
 	RateLimitRequests int
 	RateLimitWindow   time.Duration
+
+	// Email — Resend
+	ResendAPIKey   string // re_xxxxxxxxxxxx
+	ResendFromAddr string // e.g. "Docflow <invites@docflow.asia>"
 }
 
 func Load() *Config {
@@ -47,9 +52,9 @@ func Load() *Config {
 	}
 
 	return &Config{
-		AppEnv:  getEnv("APP_ENV", "development"),
-		AppPort: getEnv("APP_PORT", "8080"),
-		AppURL:  getEnv("APP_URL", "http://localhost:8080"),
+		AppEnv:      getEnv("APP_ENV", "development"),
+		AppPort:     getEnv("APP_PORT", "8080"),
+		AppURL:      getEnv("APP_URL", "http://localhost:8080"),
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		DatabaseURL: mustGetEnv("DATABASE_URL"),
@@ -68,11 +73,22 @@ func Load() *Config {
 		RateLimitWindow:   mustParseDuration("RATE_LIMIT_WINDOW", "1m"),
 
 		LogLevel: getEnv("LOG_LEVEL", "debug"),
+
+		// Email — required in production, optional in development
+		// (if missing, invitation emails silently fail but rows are still created)
+		ResendAPIKey:   getEnv("RESEND_API_KEY", ""),
+		ResendFromAddr: getEnv("RESEND_FROM_ADDR", "Docflow <invites@docflow.asia>"),
 	}
 }
 
 func (c *Config) IsDevelopment() bool {
 	return c.AppEnv == "development"
+}
+
+// IsEmailConfigured returns true when the Resend API key is set.
+// In development you can omit the key — invitations are created but not emailed.
+func (c *Config) IsEmailConfigured() bool {
+	return c.ResendAPIKey != ""
 }
 
 func getEnv(key, fallback string) string {
