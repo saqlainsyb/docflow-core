@@ -19,8 +19,9 @@ type RoomMessage struct {
 //
 // Lifecycle:
 //   - Created lazily by the Hub when the first client connects.
-//   - Destroyed (goroutine exits) when the last client disconnects.
-//   - The Hub is notified via Hub.removeRoom so it can clean up its map.
+//   - Destroyed (goroutine exits) when the last client disconnects, or when
+//     Hub.Shutdown() calls Close().
+//   - The Hub is notified via room.done closing.
 //
 // Concurrency rule:
 //   - Run() is the ONLY goroutine that reads or writes room.clients.
@@ -47,11 +48,14 @@ type Room struct {
 	// unregister is sent by a Client's ReadPump when its connection closes.
 	unregister chan *Client
 
+	// shutdown is closed by Hub.Shutdown() to trigger a forced drain.
+	shutdown chan struct{}
+
 	// documentService is used by Run() to persist Yjs updates.
 	// Run() is the only caller — no additional locking needed.
 	documentService *services.DocumentService
 
-	// done is closed by Run() when the room empties.
+	// done is closed by Run() when the room exits (empty or shutdown).
 	// The Hub watches for this to know when to remove the room.
 	done chan struct{}
 }
@@ -66,16 +70,23 @@ func NewRoom(documentID string, documentService *services.DocumentService) *Room
 		awareness:       make(chan *RoomMessage, 256),
 		register:        make(chan *Client),
 		unregister:      make(chan *Client),
+		shutdown:        make(chan struct{}),
 		documentService: documentService,
 		done:            make(chan struct{}),
 	}
 }
 
+// Close signals this room to send close frames to all clients and exit.
+// Called by Hub.Shutdown — never call directly from outside the hub.
+func (r *Room) Close() {
+	close(r.shutdown)
+}
+
 // Run is the event loop for this room.
 // It must be started in a goroutine: go room.Run()
 //
-// It exits when the last client disconnects, closing room.done
-// to signal the Hub that this room is ready to be garbage collected.
+// It exits when the last client disconnects, or when Close() is called
+// during server shutdown. closing r.done signals the Hub.
 func (r *Room) Run() {
 	defer close(r.done)
 
@@ -88,7 +99,7 @@ func (r *Room) Run() {
 			log.Printf("ws: user %s joined doc %s (%d connected)",
 				client.userID, r.documentID, len(r.clients))
 
-			// Send SYNC_STEP_1 to new client (unchanged).
+			// Send SYNC_STEP_1 to new client.
 			initMsg := []byte{MsgSync, 0}
 			select {
 			case client.send <- initMsg:
@@ -98,11 +109,8 @@ func (r *Room) Run() {
 				break
 			}
 
-			// NEW: ask every existing client to re-broadcast their awareness now.
-			// Without this, the new client waits up to several seconds (or forever
-			// if peers are idle) to see other cursors.
-			// MsgAwareness + subtype 0x00 is the y-websocket "query awareness" message —
-			// recipients respond by immediately re-sending their full awareness state.
+			// Ask every existing client to re-broadcast their awareness now
+			// so the new client sees cursors without waiting for the next edit.
 			awarenessQuery := []byte{MsgAwareness, 0x00}
 			for existing := range r.clients {
 				if existing == client {
@@ -111,14 +119,12 @@ func (r *Room) Run() {
 				select {
 				case existing.send <- awarenessQuery:
 				default:
-					// Slow/dead — let it be cleaned up naturally on next write failure.
 				}
 			}
 
 		// ── client disconnected ────────────────────────────────────────────
 		case client := <-r.unregister:
 			if _, ok := r.clients[client]; !ok {
-				// Already removed — nothing to do.
 				continue
 			}
 
@@ -128,19 +134,17 @@ func (r *Room) Run() {
 			log.Printf("ws: user %s left doc %s (%d remaining)",
 				client.userID, r.documentID, len(r.clients))
 
-			// Broadcast a null awareness message for this client so other
-			// clients remove their cursor from the UI immediately.
+			// Broadcast a null awareness message so other clients remove
+			// this user's cursor from the UI immediately.
 			nullAwareness := []byte{MsgAwareness}
 			r.fanout(nil, nullAwareness, false)
 
 			if len(r.clients) == 0 {
-				// Room is empty — exit the goroutine.
-				// closing r.done signals the Hub to remove this room from its map.
 				log.Printf("ws: room for doc %s is empty, shutting down", r.documentID)
 				return
 			}
 
-		// ── Yjs document update (must persist first, then broadcast) ───────
+		// ── Yjs document update (persist first, then broadcast) ────────────
 		case msg := <-r.broadcast:
 			_, err := r.documentService.PersistUpdate(
 				context.Background(),
@@ -149,24 +153,30 @@ func (r *Room) Run() {
 			)
 			if err != nil {
 				// Persistence failed — do NOT broadcast. Log and continue.
-				// The sending client will see no echo; they can retry.
 				log.Printf("ws: failed to persist update for doc %s: %v", r.documentID, err)
 				continue
 			}
 
-			// Persistence succeeded — forward to all other clients.
 			r.fanout(msg.sender, msg.data, true)
 
-			// NOTE: snapshot compaction is intentionally disabled in V1.
-			// The compactSnapshot call was removed because it passed empty
-			// bytes as the merged state, which would silently corrupt
-			// documents after every 100 edits by replacing the snapshot
-			// with nothing. Updates accumulate in document_updates until
-			// V2 implements proper Yjs binary state vector merge.
-
-		// ── awareness update (cursor / presence — broadcast only) ─────────
+		// ── awareness update (cursor / presence — broadcast only) ──────────
 		case msg := <-r.awareness:
 			r.fanout(msg.sender, msg.data, false)
+
+		// ── graceful shutdown ──────────────────────────────────────────────
+		case <-r.shutdown:
+			// Send close frames to all connected clients by closing their
+			// send channels. WritePump detects the closed channel and sends
+			// a WebSocket close frame before its goroutine exits.
+			log.Printf("ws: doc room %s received shutdown signal, closing %d client(s)",
+				r.documentID, len(r.clients))
+			for client := range r.clients {
+				close(client.send)
+			}
+			// Clear the map so the deferred close(r.done) fires immediately
+			// without waiting for unregister messages that will never come.
+			r.clients = make(map[*Client]bool)
+			return
 		}
 	}
 }
@@ -182,28 +192,22 @@ func (r *Room) Run() {
 func (r *Room) fanout(sender *Client, data []byte, dropOnFull bool) {
 	for client := range r.clients {
 		if client == sender {
-			continue // never echo back to the originator
+			continue
 		}
 
 		select {
 		case client.send <- data:
-			// delivered
 		default:
-			// Channel full — client is too slow or dead.
 			if dropOnFull {
 				log.Printf("ws: dropping slow client user %s doc %s", client.userID, r.documentID)
 				delete(r.clients, client)
 				close(client.send)
 			}
-			// If !dropOnFull: silently skip — awareness drops are fine.
 		}
 	}
 }
 
 // Size returns the number of clients currently in this room.
-// Called by the Hub to report connected counts for cursor colour assignment.
-// Note: this is a snapshot read outside of Run() — safe in practice because
-// it's only used for a best-effort colour assignment, not for correctness.
 func (r *Room) Size() int {
 	return len(r.clients)
 }

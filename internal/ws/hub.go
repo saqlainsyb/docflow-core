@@ -2,6 +2,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
@@ -149,27 +150,12 @@ func (h *Hub) watchBoardRoom(boardID string, room *BoardRoom) {
 
 // BroadcastToBoard serialises a board event payload to JSON and delivers it
 // to all clients currently in the board room.
-//
-// Called by card and column services when mutations happen
-// (replaces the // TODO stubs in services/cards.go and services/columns.go).
-//
-// payload must be a struct with a "type" field — e.g.:
-//
-//	hub.BroadcastToBoard(boardID, map[string]any{
-//	    "type": ws.EvtCardMoved,
-//	    "card_id": cardID,
-//	    "column_id": columnID,
-//	    "position": position,
-//	})
-//
-// If no room exists for the board (nobody is connected), this is a no-op.
 func (h *Hub) BroadcastToBoard(boardID string, payload any) {
 	h.boardMu.RLock()
 	room, ok := h.boardRooms[boardID]
 	h.boardMu.RUnlock()
 
 	if !ok {
-		// No one is connected to this board — nothing to broadcast.
 		return
 	}
 
@@ -182,21 +168,103 @@ func (h *Hub) BroadcastToBoard(boardID string, payload any) {
 	room.broadcast <- data
 }
 
+// ── Graceful shutdown ─────────────────────────────────────────────────────────
+
+// Shutdown closes every active document and board room, sends WebSocket close
+// frames to all connected clients, and waits for all room goroutines to exit.
+//
+// It respects the provided context deadline — if rooms do not drain within
+// the deadline, Shutdown returns anyway so the process can exit cleanly.
+//
+// Call order in main.go:
+//
+//	server.Shutdown(httpCtx)  // stop accepting new connections first
+//	hub.Shutdown(wsCtx)       // then drain WebSocket rooms
+//	redisClient.Close()       // then close backing resources
+//	dbPool.Close()
+func (h *Hub) Shutdown(ctx context.Context) {
+	// Snapshot both room maps under their respective locks, then release
+	// immediately. We don't want to hold locks while sending close frames
+	// or waiting on done channels — that would deadlock watchDocRoom /
+	// watchBoardRoom which also need to acquire the write lock.
+	h.docMu.RLock()
+	docRooms := make([]*Room, 0, len(h.docRooms))
+	for _, r := range h.docRooms {
+		docRooms = append(docRooms, r)
+	}
+	h.docMu.RUnlock()
+
+	h.boardMu.RLock()
+	boardRooms := make([]*BoardRoom, 0, len(h.boardRooms))
+	for _, r := range h.boardRooms {
+		boardRooms = append(boardRooms, r)
+	}
+	h.boardMu.RUnlock()
+
+	total := len(docRooms) + len(boardRooms)
+	log.Printf("hub: shutting down %d doc room(s) and %d board room(s)",
+		len(docRooms), len(boardRooms))
+
+	if total == 0 {
+		return
+	}
+
+	// Signal each room to close. Each room's Close() method sends a WebSocket
+	// close frame to every connected client, which causes their ReadPumps to
+	// return errors and send to the unregister channel, which drains the room,
+	// which causes Run() to return, which closes room.done.
+	for _, r := range docRooms {
+		r.Close()
+	}
+	for _, r := range boardRooms {
+		r.Close()
+	}
+
+	// Wait for all room goroutines to finish, bounded by the context deadline.
+	// We use a WaitGroup fan-out so all rooms drain concurrently rather than
+	// sequentially — the total wait is bounded by the slowest room, not the sum.
+	var wg sync.WaitGroup
+
+	for _, r := range docRooms {
+		wg.Add(1)
+		go func(room *Room) {
+			defer wg.Done()
+			select {
+			case <-room.done:
+			case <-ctx.Done():
+				log.Printf("hub: timed out waiting for doc room %s to drain", room.documentID)
+			}
+		}(r)
+	}
+
+	for _, r := range boardRooms {
+		wg.Add(1)
+		go func(room *BoardRoom) {
+			defer wg.Done()
+			select {
+			case <-room.done:
+			case <-ctx.Done():
+				log.Printf("hub: timed out waiting for board room %s to drain", room.boardID)
+			}
+		}(r)
+	}
+
+	wg.Wait()
+}
+
 // ── BoardRoom ─────────────────────────────────────────────────────────────────
 
 // BoardRoom manages clients connected to the board event stream (/ws/boards/:id).
 // Unlike document Rooms, board rooms only broadcast JSON — no persistence.
-//
-// Each client here is a plain browser tab with the board view open.
-// When a card moves, the hub calls BroadcastToBoard and every connected
-// tab updates its UI without polling.
 type BoardRoom struct {
 	boardID    string
 	clients    map[*BoardClient]bool
 	broadcast  chan []byte
 	register   chan *BoardClient
 	unregister chan *BoardClient
-	done       chan struct{}
+	// shutdown signals Run() to close all clients and exit.
+	shutdown chan struct{}
+	done     chan struct{}
 }
 
 // BoardClient represents one browser tab connected to the board event stream.
@@ -204,7 +272,7 @@ type BoardClient struct {
 	conn   *websocket.Conn
 	send   chan []byte
 	userID string
-	name   string 
+	name   string
 }
 
 // NewBoardClient constructs a BoardClient after a successful WebSocket upgrade.
@@ -213,7 +281,7 @@ func NewBoardClient(conn *websocket.Conn, userID string, name string) *BoardClie
 		conn:   conn,
 		send:   make(chan []byte, 256),
 		userID: userID,
-		name:   name, 
+		name:   name,
 	}
 }
 
@@ -233,9 +301,6 @@ func (c *BoardClient) ReadPump(room *BoardRoom) {
 	})
 
 	for {
-		// We don't process incoming messages from board clients —
-		// boards are server-push only. But we must keep reading
-		// to detect close frames and trigger unregister.
 		_, _, err := c.conn.ReadMessage()
 		if err != nil {
 			return
@@ -256,6 +321,7 @@ func (c *BoardClient) WritePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
+				// send channel closed — send WebSocket close frame and exit.
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -280,8 +346,15 @@ func NewBoardRoom(boardID string) *BoardRoom {
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *BoardClient),
 		unregister: make(chan *BoardClient),
+		shutdown:   make(chan struct{}),
 		done:       make(chan struct{}),
 	}
+}
+
+// Close signals this room to send close frames to all clients and exit.
+// Called by Hub.Shutdown — never call directly from outside the hub.
+func (r *BoardRoom) Close() {
+	close(r.shutdown)
 }
 
 // Run is the event loop for the board room. Same single-writer pattern as Room.
@@ -292,7 +365,6 @@ func (r *BoardRoom) Run() {
 		select {
 		case client := <-r.register:
 			r.clients[client] = true
-			// Broadcast join to everyone except the joiner
 			joinMsg, _ := json.Marshal(map[string]any{
 				"type":    EvtUserJoined,
 				"user_id": client.userID,
@@ -331,6 +403,21 @@ func (r *BoardRoom) Run() {
 					close(client.send)
 				}
 			}
+
+		case <-r.shutdown:
+			// Graceful shutdown: close every client's send channel.
+			// WritePump sees the closed channel and sends a WebSocket close frame,
+			// which causes the peer to close its end, which causes ReadPump to
+			// return an error and send to unregister — but we're already shutting
+			// down so we don't need to process those unregisters.
+			log.Printf("hub: board room %s received shutdown signal, closing %d client(s)",
+				r.boardID, len(r.clients))
+			for client := range r.clients {
+				close(client.send)
+			}
+			// Clear the map so the deferred close(r.done) fires immediately.
+			r.clients = make(map[*BoardClient]bool)
+			return
 		}
 	}
 }
