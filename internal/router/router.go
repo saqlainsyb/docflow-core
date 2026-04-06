@@ -2,8 +2,6 @@
 package router
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 	"github.com/saqlainsyb/docflow-core/internal/config"
 	"github.com/saqlainsyb/docflow-core/internal/handlers"
@@ -13,6 +11,7 @@ import (
 
 func Setup(
 	cfg              *config.Config,
+	healthHandler    *handlers.HealthHandler,
 	authHandler      *handlers.AuthHandler,
 	workspaceHandler *handlers.WorkspaceHandler,
 	boardHandler     *handlers.BoardHandler,
@@ -33,9 +32,10 @@ func Setup(
 	r.Use(middleware.CORS(cfg))
 	r.Use(middleware.RateLimit(cfg))
 
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
+	// ── Health ────────────────────────────────────────────────────────────────
+	// Intentionally outside the rate limiter — Fly.io probes this every few
+	// seconds and should never be throttled. Also outside auth — no token needed.
+	r.GET("/health", healthHandler.Check)
 
 	// ── WebSocket routes ──────────────────────────────────────────────────────
 	r.GET("/ws/documents/:id", wsHandler.HandleDocumentWS)
@@ -81,8 +81,6 @@ func Setup(
 		}
 
 		// Board-scoped routes
-		// middleware.Board resolves workspace membership AND effective board role,
-		// injecting both "member_role" (workspace) and "board_role" into context.
 		board := protected.Group("/boards/:id")
 		board.Use(middleware.Board(boardRepo, workspaceRepo))
 		{
@@ -92,9 +90,9 @@ func Setup(
 			board.DELETE("",               boardHandler.DeleteBoard)
 			board.GET("/members",          boardHandler.ListBoardMembers)
 			board.POST("/members",         boardHandler.AddBoardMember)
-			board.PATCH("/members/:uid",   boardHandler.UpdateBoardMemberRole) // new
+			board.PATCH("/members/:uid",   boardHandler.UpdateBoardMemberRole)
 			board.DELETE("/members/:uid",  boardHandler.RemoveBoardMember)
-			board.POST("/transfer",        boardHandler.TransferOwnership)     // new
+			board.POST("/transfer",        boardHandler.TransferOwnership)
 			board.POST("/share-link",      boardHandler.GenerateShareLink)
 			board.DELETE("/share-link",    boardHandler.RevokeShareLink)
 			board.POST("/columns",         columnHandler.CreateColumn)

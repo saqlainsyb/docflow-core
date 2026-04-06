@@ -52,6 +52,7 @@ func main() {
 	cardService   := services.NewCardService(cardRepo, columnRepo, boardService, hub)
 
 	// ── handlers ─────────────────────────────────────────────────────────
+	healthHandler    := handlers.NewHealthHandler(dbPool, redisClient)
 	authHandler      := handlers.NewAuthHandler(authService, cfg)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	boardHandler     := handlers.NewBoardHandler(boardService)
@@ -66,6 +67,7 @@ func main() {
 	// with no shutdown hook.
 	ginRouter := router.Setup(
 		cfg,
+		healthHandler,
 		authHandler,
 		workspaceHandler,
 		boardHandler,
