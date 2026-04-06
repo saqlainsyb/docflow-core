@@ -88,3 +88,27 @@ type ShareLinkResponse struct {
 	URL   string `json:"url"`
 	Token string `json:"token"`
 }
+
+// ArchivedCardResponse is the DTO returned by GET /boards/:id/archived-cards.
+//
+// It extends the normal card fields with:
+//   - ColumnTitle — so the UI can group or label cards without a separate
+//     column lookup (the archived card is no longer in the live board state)
+//   - ArchivedAt  — c.updated_at at the time of archiving; used for display
+//     ("archived 2 days ago") and for ordering (newest first)
+//
+// document_id is always present — every card has exactly one document and
+// the UI may want to open it even for archived cards.
+type ArchivedCardResponse struct {
+	ID          string      `json:"id"`
+	BoardID     string      `json:"board_id"`
+	ColumnID    string      `json:"column_id"`
+	ColumnTitle string      `json:"column_title"`
+	Title       string      `json:"title"`
+	Position    float64     `json:"position"`
+	Color       *string     `json:"color"`
+	Assignee    *UserPublic `json:"assignee"`
+	DocumentID  string      `json:"document_id"`
+	ArchivedAt  time.Time   `json:"archived_at"`
+	CreatedAt   time.Time   `json:"created_at"`
+}

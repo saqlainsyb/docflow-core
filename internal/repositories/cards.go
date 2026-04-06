@@ -347,3 +347,40 @@ func (r *CardRepository) GetDocumentID(ctx context.Context, cardID string) (stri
 
 	return documentID, nil
 }
+
+// GetAssignee returns the assignee UserPublic for a card.
+// Returns nil, nil when the card has no assignee (assignee_id IS NULL).
+// Returns ErrNotFound only if the card itself does not exist —
+// a missing user row (data integrity issue) is treated as no assignee.
+//
+// This exists so CardService can build a full CardResponse without
+// needing a UserRepository dependency injected into it.
+func (r *CardRepository) GetAssignee(ctx context.Context, cardID string) (*models.UserPublic, error) {
+	var assignee models.UserPublic
+	var avatarURL *string
+ 
+	err := r.db.QueryRow(ctx, `
+		SELECT u.id, u.email, u.name, u.avatar_url, u.created_at
+		FROM cards c
+		JOIN users u ON u.id = c.assignee_id
+		WHERE c.id = $1
+		  AND c.assignee_id IS NOT NULL
+	`, cardID).Scan(
+		&assignee.ID,
+		&assignee.Email,
+		&assignee.Name,
+		&avatarURL,
+		&assignee.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Card has no assignee (or card doesn't exist — FindByID
+			// should have caught the latter already).
+			return nil, nil
+		}
+		return nil, err
+	}
+ 
+	assignee.AvatarURL = avatarURL
+	return &assignee, nil
+}

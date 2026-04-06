@@ -425,3 +425,28 @@ func (s *BoardService) checkAccess(ctx context.Context, boardID, userID, workspa
 
 	return nil
 }
+
+// GetArchivedCards returns all archived cards for a board.
+//
+// Access rules mirror GetBoardDetail exactly — the caller must have board
+// access (workspace member + private-board check). We reuse checkAccess
+// rather than duplicating the logic.
+//
+// The repository query orders by column position ASC then updated_at DESC
+// (most recently archived first within each column). The service layer
+// does not reorder — the repository result is the canonical order.
+func (s *BoardService) GetArchivedCards(ctx context.Context, boardID, userID, workspaceRole string) ([]models.ArchivedCardResponse, error) {
+	if err := s.checkAccess(ctx, boardID, userID, workspaceRole); err != nil {
+		return nil, err
+	}
+ 
+	cards, err := s.boardRepo.FindArchivedCards(ctx, boardID)
+	if err != nil {
+		if err == repositories.ErrNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+ 
+	return cards, nil
+}

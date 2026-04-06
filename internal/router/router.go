@@ -87,6 +87,7 @@ func Setup(
 		board.Use(middleware.Board(boardRepo, workspaceRepo))
 		{
 			board.GET("",                  boardHandler.GetBoardDetail)
+			board.GET("/archived-cards",   boardHandler.GetArchivedCards)
 			board.PATCH("",                boardHandler.UpdateBoard)
 			board.DELETE("",               boardHandler.DeleteBoard)
 			board.GET("/members",          boardHandler.ListBoardMembers)

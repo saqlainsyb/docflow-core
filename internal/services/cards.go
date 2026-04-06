@@ -286,32 +286,52 @@ func (s *CardService) ArchiveCard(ctx context.Context, cardID, userID, memberRol
 
 // UnarchiveCard restores an archived card back to its column.
 func (s *CardService) UnarchiveCard(ctx context.Context, cardID, userID, memberRole string) error {
-	card, err := s.cardRepo.FindByID(ctx, cardID)
-	if err != nil {
-		if errors.Is(err, repositories.ErrNotFound) {
-			return ErrNotFound
-		}
-		return err
-	}
+ 	card, err := s.cardRepo.FindByID(ctx, cardID)
+ 	if err != nil {
+ 		if errors.Is(err, repositories.ErrNotFound) {
+ 			return ErrNotFound
+ 		}
+ 		return err
+ 	}
 
-	if err := s.boardService.checkAccess(ctx, card.BoardID, userID, memberRole); err != nil {
-		return err
-	}
+ 	if err := s.boardService.checkAccess(ctx, card.BoardID, userID, memberRole); err != nil {
+ 		return err
+ 	}
 
-	if err := s.cardRepo.Unarchive(ctx, cardID); err != nil {
-		if errors.Is(err, repositories.ErrNotFound) {
-			return ErrNotFound
-		}
-		return err
-	}
+ 	if err := s.cardRepo.Unarchive(ctx, cardID); err != nil {
+ 		if errors.Is(err, repositories.ErrNotFound) {
+ 			return ErrNotFound
+ 		}
+ 		return err
+ 	}
 
-	s.hub.BroadcastToBoard(card.BoardID, map[string]any{
-		"type":    "CARD_UNARCHIVED",
-		"card_id": cardID,
-	})
+ 	// Reload card so archived = false is reflected in the broadcast.
+ 	restored, err := s.cardRepo.FindByID(ctx, cardID)
+ 	if err != nil {
+ 		return err
+ 	}
 
-	return nil
-}
+ 	documentID, err := s.cardRepo.GetDocumentID(ctx, cardID)
+ 	if err != nil {
+ 		return err
+ 	}
+
+ 	// Fetch assignee via the card repo so we don't need a userRepo
+ 	// dependency on CardService.
+ 	assignee, err := s.cardRepo.GetAssignee(ctx, cardID)
+ 	if err != nil {
+ 		return err
+ 	}
+
+ 	resp := cardToResponse(restored, documentID, assignee)
+
+ 	s.hub.BroadcastToBoard(card.BoardID, map[string]any{
+ 		"type": "CARD_UNARCHIVED",
+ 		"card": resp,
+ 	})
+
+ 	return nil
+ }
 
 // cardToResponse converts a Card db model into a CardResponse DTO.
 // assignee is optional — pass nil if no assignee lookup was done.

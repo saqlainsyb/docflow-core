@@ -553,3 +553,104 @@ func (r *BoardRepository) ListBoardMembers(ctx context.Context, boardID string) 
 
 	return members, rows.Err()
 }
+
+// FindArchivedCards returns all archived cards for a board, ordered by
+// the column they belong to (column position ASC) and then by the time
+// they were archived (updated_at DESC — most recently archived first).
+//
+// Archived cards are excluded from GetBoardDetail intentionally, so this
+// is the only path to retrieve them. The query joins columns so we can
+// return the column title alongside each card (useful for the UI drawer)
+// and joins documents so document_id is always present.
+//
+// We LEFT JOIN users to populate the assignee even for archived cards.
+func (r *BoardRepository) FindArchivedCards(ctx context.Context, boardID string) ([]models.ArchivedCardResponse, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT
+			c.id,
+			c.board_id,
+			c.column_id,
+			col.title        AS column_title,
+			c.title,
+			c.position,
+			c.color,
+			c.updated_at     AS archived_at,
+			c.created_at,
+			c.assignee_id,
+			u.name           AS assignee_name,
+			u.email          AS assignee_email,
+			u.avatar_url     AS assignee_avatar,
+			d.id             AS document_id
+		FROM cards c
+		JOIN columns col
+			ON col.id = c.column_id
+		LEFT JOIN users u
+			ON u.id = c.assignee_id
+		LEFT JOIN documents d
+			ON d.card_id = c.id
+		WHERE c.board_id = $1
+		  AND c.archived = TRUE
+		ORDER BY col.position ASC, c.updated_at DESC
+	`, boardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+ 
+	var cards []models.ArchivedCardResponse
+	for rows.Next() {
+		var (
+			card models.ArchivedCardResponse
+ 
+			assigneeID     *string
+			assigneeName   *string
+			assigneeEmail  *string
+			assigneeAvatar *string
+			documentID     *string
+		)
+ 
+		if err := rows.Scan(
+			&card.ID,
+			&card.BoardID,
+			&card.ColumnID,
+			&card.ColumnTitle,
+			&card.Title,
+			&card.Position,
+			&card.Color,
+			&card.ArchivedAt,
+			&card.CreatedAt,
+			&assigneeID,
+			&assigneeName,
+			&assigneeEmail,
+			&assigneeAvatar,
+			&documentID,
+		); err != nil {
+			return nil, err
+		}
+ 
+		if documentID != nil {
+			card.DocumentID = *documentID
+		}
+ 
+		if assigneeID != nil {
+			card.Assignee = &models.UserPublic{
+				ID:        *assigneeID,
+				Name:      *assigneeName,
+				Email:     *assigneeEmail,
+				AvatarURL: assigneeAvatar,
+			}
+		}
+ 
+		cards = append(cards, card)
+	}
+ 
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+ 
+	if cards == nil {
+		cards = []models.ArchivedCardResponse{}
+	}
+ 
+	return cards, nil
+}

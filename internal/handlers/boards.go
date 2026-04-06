@@ -264,6 +264,31 @@ func (h *BoardHandler) GetPublicBoard(c *gin.Context) {
 	c.JSON(http.StatusOK, board)
 }
 
+// GetArchivedCards handles GET /api/v1/boards/:id/archived-cards
+//
+// Returns all archived cards for the board, ordered by column position
+// then archived-at descending (most recently archived first within each
+// column).
+//
+// Auth: board middleware has already run — user_id and member_role are
+// injected into context. The service layer enforces private-board access
+// using the workspace member_role.
+//
+// Response: 200 []ArchivedCardResponse  (empty array when none archived)
+func (h *BoardHandler) GetArchivedCards(c *gin.Context) {
+	boardID       := c.Param("id")
+	userID        := c.GetString("user_id")
+	workspaceRole := c.GetString("member_role")
+ 
+	cards, err := h.boardService.GetArchivedCards(c.Request.Context(), boardID, userID, workspaceRole)
+	if err != nil {
+		handleBoardError(c, err)
+		return
+	}
+ 
+	c.JSON(http.StatusOK, cards)
+}
+
 // handleBoardError maps service errors to HTTP responses.
 func handleBoardError(c *gin.Context, err error) {
 	switch {
