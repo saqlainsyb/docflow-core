@@ -46,30 +46,30 @@ func main() {
 	redisClient := db.ConnectRedis(cfg)
 
 	// ── repositories ─────────────────────────────────────────────────────
-	userRepo         := repositories.NewUserRepository(dbPool)
+	userRepo := repositories.NewUserRepository(dbPool)
 	refreshTokenRepo := repositories.NewRefreshTokenRepository(dbPool)
-	workspaceRepo    := repositories.NewWorkspaceRepository(dbPool)
-	boardRepo        := repositories.NewBoardRepository(dbPool)
-	columnRepo       := repositories.NewColumnRepository(dbPool)
-	cardRepo         := repositories.NewCardRepository(dbPool)
-	documentRepo     := repositories.NewDocumentRepository(dbPool)
-	invitationRepo   := repositories.NewInvitationRepository(dbPool)
+	workspaceRepo := repositories.NewWorkspaceRepository(dbPool)
+	boardRepo := repositories.NewBoardRepository(dbPool)
+	columnRepo := repositories.NewColumnRepository(dbPool)
+	cardRepo := repositories.NewCardRepository(dbPool)
+	documentRepo := repositories.NewDocumentRepository(dbPool)
+	invitationRepo := repositories.NewInvitationRepository(dbPool)
 
 	// ── Email client ──────────────────────────────────────────────────────────
 	// emailClient is always constructed — if RESEND_API_KEY is empty the client
 	// exists but all send calls will return an error (handled as non-fatal in
 	// the invitation service). This avoids nil checks everywhere.
 	emailClient := email.NewClient(cfg.ResendAPIKey, cfg.ResendFromAddr)
- 
+
 	if !cfg.IsEmailConfigured() {
 		logger.Warn("RESEND_API_KEY is not set — invitation emails will not be delivered")
 	}
 
 	// ── services (partial — documentService needed by hub) ───────────────
-	authService      := services.NewAuthService(userRepo, refreshTokenRepo, workspaceRepo, cfg)
+	authService := services.NewAuthService(userRepo, refreshTokenRepo, workspaceRepo, cfg)
 	workspaceService := services.NewWorkspaceService(workspaceRepo, userRepo)
-	boardService     := services.NewBoardService(boardRepo, workspaceRepo, cfg)
-	documentService  := services.NewDocumentService(documentRepo, cardRepo, columnRepo, boardService, cfg)
+	boardService := services.NewBoardService(boardRepo, workspaceRepo, cfg)
+	documentService := services.NewDocumentService(documentRepo, cardRepo, columnRepo, boardService, cfg)
 	invitationService := services.NewInvitationService(invitationRepo, workspaceRepo, userRepo, emailClient, cfg.FrontendURL)
 
 	// ── websocket hub ─────────────────────────────────────────────────────
@@ -77,18 +77,18 @@ func main() {
 
 	// ── services (remainder — depend on hub) ──────────────────────────────
 	columnService := services.NewColumnService(columnRepo, boardService, hub)
-	cardService   := services.NewCardService(cardRepo, columnRepo, boardService, hub)
+	cardService := services.NewCardService(cardRepo, columnRepo, boardService, hub)
 
 	// ── handlers ─────────────────────────────────────────────────────────
-	healthHandler    := handlers.NewHealthHandler(dbPool, redisClient)
-	authHandler      := handlers.NewAuthHandler(authService, cfg)
+	healthHandler := handlers.NewHealthHandler(dbPool, redisClient)
+	authHandler := handlers.NewAuthHandler(authService, cfg)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 	invitationHandler := handlers.NewInvitationHandler(invitationService, logger)
-	boardHandler     := handlers.NewBoardHandler(boardService)
-	columnHandler    := handlers.NewColumnHandler(columnService)
-	cardHandler      := handlers.NewCardHandler(cardService)
-	documentHandler  := handlers.NewDocumentHandler(documentService, hub)
-	wsHandler        := handlers.NewWSHandler(hub, cfg)
+	boardHandler := handlers.NewBoardHandler(boardService)
+	columnHandler := handlers.NewColumnHandler(columnService)
+	cardHandler := handlers.NewCardHandler(cardService)
+	documentHandler := handlers.NewDocumentHandler(documentService, hub)
+	wsHandler := handlers.NewWSHandler(hub, cfg)
 
 	// ── HTTP server ───────────────────────────────────────────────────────
 	// Use net/http.Server directly instead of r.Run() so we can call
@@ -177,8 +177,10 @@ func main() {
 	// Step 3 — close backing resources.
 	// By this point no goroutine is touching the pool or the Redis client,
 	// so these calls are safe and will not block.
-	redisClient.Close()
-	log.Println("Redis connection closed")
+	if redisClient != nil {
+		redisClient.Close()
+		log.Println("Redis connection closed")
+	}
 
 	dbPool.Close()
 	log.Println("database connection pool closed")
