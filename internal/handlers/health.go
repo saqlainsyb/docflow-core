@@ -75,12 +75,16 @@ func (h *HealthHandler) Check(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), probeTimeout)
 		defer cancel()
 
-		status := "ok"
-		if err := h.redis.Ping(ctx).Err(); err != nil {
-			status = err.Error()
-			mu.Lock()
-			healthy = false
-			mu.Unlock()
+		status := "disabled"
+
+		if h.redis != nil {
+			status = "ok"
+			if err := h.redis.Ping(ctx).Err(); err != nil {
+				status = err.Error()
+				mu.Lock()
+				healthy = false
+				mu.Unlock()
+			}
 		}
 
 		mu.Lock()

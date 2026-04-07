@@ -58,7 +58,7 @@ func Load() *Config {
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		DatabaseURL: mustGetEnv("DATABASE_URL"),
-		RedisURL:    mustGetEnv("REDIS_URL"),
+		RedisURL:    getEnv("REDIS_URL", ""),
 
 		JWTAccessSecret:   mustGetEnv("JWT_ACCESS_SECRET"),
 		JWTRefreshSecret:  mustGetEnv("JWT_REFRESH_SECRET"),

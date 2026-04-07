@@ -9,6 +9,10 @@ import (
 )
 
 func ConnectRedis(cfg *config.Config) *redis.Client {
+	if cfg.RedisURL == "" {
+		log.Println("redis disabled")
+		return nil
+	}
 	opts, err := redis.ParseURL(cfg.RedisURL)
 	if err != nil {
 		log.Fatalf("invalid redis URL: %v", err)
