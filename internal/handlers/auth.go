@@ -29,36 +29,47 @@ func NewAuthHandler(authService *services.AuthService, cfg *config.Config) *Auth
 // Path=/api/v1/auth: browser only attaches the cookie to auth endpoints,
 // not to every API call, which reduces unnecessary exposure.
 func (h *AuthHandler) setRefreshCookie(c *gin.Context, rawToken string) {
-	maxAge := int(h.cfg.JWTRefreshExpiry.Seconds())
-	secure := !h.cfg.IsDevelopment()
+    maxAge := int(h.cfg.JWTRefreshExpiry.Seconds())
+    isDev := h.cfg.IsDevelopment()
 
-	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie(
-		refreshCookieName,
-		rawToken,
-		maxAge,
-		"/api/v1/auth", // path — scoped to auth endpoints only
-		"",             // domain — empty means current host
-		secure,         // secure — false in dev, true in production
-		true,           // httpOnly — JS cannot read this
-	)
+    // SameSite=None is required for cross-subdomain cookies (docflow.asia → api.docflow.asia).
+    // SameSite=None MUST be paired with Secure=true — browsers reject it otherwise.
+    // In local dev (http) we fall back to SameSite=Lax so cookies still work without HTTPS.
+    if isDev {
+        c.SetSameSite(http.SameSiteLaxMode)
+    } else {
+        c.SetSameSite(http.SameSiteNoneMode)
+    }
+    c.SetCookie(
+        refreshCookieName,
+        rawToken,
+        maxAge,
+        "/api/v1/auth",
+        h.cfg.CookieDomain, // ".docflow.asia" in production, "" in dev
+        !isDev,             // Secure — required for SameSite=None
+        true,               // HttpOnly — JS cannot read this
+    )
 }
 
 // clearRefreshCookie expires the cookie immediately.
 // Called on logout and on theft detection so the browser discards it.
 func (h *AuthHandler) clearRefreshCookie(c *gin.Context) {
-	secure := !h.cfg.IsDevelopment()
+    isDev := h.cfg.IsDevelopment()
 
-	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie(
-		refreshCookieName,
-		"",
-		-1,            // maxAge -1 tells the browser to delete immediately
-		"/api/v1/auth",
-		"",
-		secure,
-		true,
-	)
+    if isDev {
+        c.SetSameSite(http.SameSiteLaxMode)
+    } else {
+        c.SetSameSite(http.SameSiteNoneMode)
+    }
+    c.SetCookie(
+        refreshCookieName,
+        "",
+        -1,
+        "/api/v1/auth",
+        h.cfg.CookieDomain,
+        !isDev,
+        true,
+    )
 }
 
 // Register handles POST /api/v1/auth/register
