@@ -32,7 +32,7 @@ func (h *AuthHandler) setRefreshCookie(c *gin.Context, rawToken string) {
 	maxAge := int(h.cfg.JWTRefreshExpiry.Seconds())
 	secure := !h.cfg.IsDevelopment()
 
-	c.SetSameSite(http.SameSiteNoneMode)
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie(
 		refreshCookieName,
 		rawToken,
@@ -49,7 +49,7 @@ func (h *AuthHandler) setRefreshCookie(c *gin.Context, rawToken string) {
 func (h *AuthHandler) clearRefreshCookie(c *gin.Context) {
 	secure := !h.cfg.IsDevelopment()
 
-	c.SetSameSite(http.SameSiteNoneMode)
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie(
 		refreshCookieName,
 		"",
