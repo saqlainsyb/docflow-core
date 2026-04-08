@@ -30,17 +30,35 @@ func NewAuthHandler(authService *services.AuthService, cfg *config.Config) *Auth
 // not to every API call, which reduces unnecessary exposure.
 func (h *AuthHandler) setRefreshCookie(c *gin.Context, rawToken string) {
 	maxAge := int(h.cfg.JWTRefreshExpiry.Seconds())
-	secure := !h.cfg.IsDevelopment()
 
-	c.SetSameSite(http.SameSiteNoneMode)
+	isDev := h.cfg.IsDevelopment()
+
+	var sameSite http.SameSite
+	var secure bool
+	var domain string
+
+	if isDev {
+		// LOCAL DEVELOPMENT
+		sameSite = http.SameSiteLaxMode // works on localhost without HTTPS
+		secure = false                  // MUST be false for http://
+		domain = ""                     // localhost only
+	} else {
+		// PRODUCTION
+		sameSite = http.SameSiteNoneMode // required for cross-origin cookies
+		secure = true                    // REQUIRED with SameSite=None
+		domain = ".docflow.asia"         // share across subdomains
+	}
+
+	c.SetSameSite(sameSite)
+
 	c.SetCookie(
 		refreshCookieName,
 		rawToken,
 		maxAge,
-		"/api/v1/auth", // path — scoped to auth endpoints only
-		"",             // domain — empty means current host
-		secure,         // secure — false in dev, true in production
-		true,           // httpOnly — JS cannot read this
+		"/",
+		domain,
+		secure,
+		true, // httpOnly
 	)
 }
 
